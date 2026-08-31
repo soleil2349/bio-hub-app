@@ -13,12 +13,13 @@ export const BLE_DEVICE_NAME = 'BIO_HUB';
  * We try several known patterns and fall back to auto-discovery.
  */
 export const KNOWN_SERVICE_UUIDS = [
-  '0000abcd-0000-1000-8000-00805f9b34fb',
+  '0000fbb0-0000-1000-8000-00805f9b34fb',          // independent BLE GATT service
+  '0000abcd-0000-1000-8000-00805f9b34fb',          // SLE shared (fallback)
 ];
 
 export const KNOWN_CHAR_UUIDS = [
-  '0000cdef-0000-1000-8000-00805f9b34fb',          // actual UUID seen via SLE→BLE shared GATT
-  '0000bcde-0000-1000-8000-00805f9b34fb',          // originally intended
+  '0000fbb1-0000-1000-8000-00805f9b34fb',          // independent BLE GATT char
+  '0000cdef-0000-1000-8000-00805f9b34fb',          // SLE shared (fallback)
 ];
 
 export const CMD_HEARTBEAT = 0;
