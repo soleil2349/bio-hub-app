@@ -57,8 +57,37 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
+type DisplayValues = {
+  hr: string; ecgHr: string; spo2: string; tempC: string;
+  sbp: string; dbp: string; pi: string; pttMs: string;
+  ecgSig: string; ir: string; ecgRaw: string;
+};
+
+const EMPTY_DISPLAY: DisplayValues = {
+  hr: '--', ecgHr: '--', spo2: '--', tempC: '--',
+  sbp: '--', dbp: '--', pi: '--', pttMs: '--',
+  ecgSig: '--', ir: '--', ecgRaw: '--',
+};
+
+function mergeDisplay(prev: DisplayValues, pkt: BioPkt): DisplayValues {
+  return {
+    hr:     pkt.hr     ? String(pkt.hr)            : prev.hr,
+    ecgHr:  pkt.ecgHr  ? String(pkt.ecgHr)         : prev.ecgHr,
+    spo2:   pkt.spo2   ? String(pkt.spo2)          : prev.spo2,
+    tempC:  pkt.tempC  ? pkt.tempC.toFixed(1)       : prev.tempC,
+    sbp:    pkt.sbp    ? String(pkt.sbp)            : prev.sbp,
+    dbp:    pkt.dbp    ? String(pkt.dbp)            : prev.dbp,
+    pi:     pkt.pi     ? pkt.pi.toFixed(1)          : prev.pi,
+    pttMs:  pkt.pttMs  ? String(pkt.pttMs)          : prev.pttMs,
+    ecgSig: String(pkt.ecgSig),
+    ir:     pkt.ir     ? String(pkt.ir)             : prev.ir,
+    ecgRaw: String(pkt.ecgRaw),
+  };
+}
+
 export default function DeviceScreen({ device, onDisconnect }: Props) {
   const [data, setData] = useState<BioPkt | null>(null);
+  const [display, setDisplay] = useState<DisplayValues>(EMPTY_DISPLAY);
   const [paused, setPaused] = useState(false);
   const [pktCount, setPktCount] = useState(0);
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(
@@ -76,6 +105,7 @@ export default function DeviceScreen({ device, onDisconnect }: Props) {
     cleanupRef.current = bioBleMgr.subscribeToNotifications(
       (pkt) => {
         setData(pkt);
+        setDisplay((prev) => mergeDisplay(prev, pkt));
         setPktCount((c) => c + 1);
       },
       (err) => {
@@ -192,24 +222,24 @@ export default function DeviceScreen({ device, onDisconnect }: Props) {
           </View>
 
           <View style={styles.heroRow}>
-            <DataCard label="心率 (PPG)" value={data != null ? String(data.hr) : '--'} unit="BPM" color="#EF4444" large />
-            <DataCard label="心率 (ECG)" value={data != null ? String(data.ecgHr) : '--'} unit="BPM" color="#F97316" large />
+            <DataCard label="心率 (PPG)" value={display.hr} unit="BPM" color="#EF4444" large />
+            <DataCard label="心率 (ECG)" value={display.ecgHr} unit="BPM" color="#F97316" large />
           </View>
 
           <View style={styles.grid}>
-            <DataCard label="血氧饱和度" value={data != null ? String(data.spo2) : '--'} unit="%" color="#3B82F6" />
-            <DataCard label="设备温度" value={data != null ? data.tempC.toFixed(1) : '--'} unit="°C" color="#10B981" />
-            <DataCard label="收缩压" value={data != null ? String(data.sbp) : '--'} unit="mmHg" color="#8B5CF6" />
-            <DataCard label="舒张压" value={data != null ? String(data.dbp) : '--'} unit="mmHg" color="#A855F7" />
-            <DataCard label="灌注指数" value={data != null ? data.pi.toFixed(1) : '--'} unit="%" color="#14B8A6" />
-            <DataCard label="脉搏传导时间" value={data != null ? String(data.pttMs) : '--'} unit="ms" color="#F59E0B" />
-            <DataCard label="ECG信号质量" value={data != null ? String(data.ecgSig) : '--'} unit="" color="#6366F1" />
-            <DataCard label="IR原始值" value={data != null ? String(data.ir) : '--'} unit="" color="#64748B" />
+            <DataCard label="血氧饱和度" value={display.spo2} unit="%" color="#3B82F6" />
+            <DataCard label="设备温度" value={display.tempC} unit="°C" color="#10B981" />
+            <DataCard label="收缩压" value={display.sbp} unit="mmHg" color="#8B5CF6" />
+            <DataCard label="舒张压" value={display.dbp} unit="mmHg" color="#A855F7" />
+            <DataCard label="灌注指数" value={display.pi} unit="%" color="#14B8A6" />
+            <DataCard label="脉搏传导时间" value={display.pttMs} unit="ms" color="#F59E0B" />
+            <DataCard label="ECG信号质量" value={display.ecgSig} unit="" color="#6366F1" />
+            <DataCard label="IR原始值" value={display.ir} unit="" color="#64748B" />
           </View>
 
           <View style={styles.ecgRawCard}>
             <Text style={styles.ecgRawLabel}>ECG 原始采样</Text>
-            <Text style={styles.ecgRawValue}>{data?.ecgRaw != null ? String(data.ecgRaw) : '--'}</Text>
+            <Text style={styles.ecgRawValue}>{display.ecgRaw}</Text>
           </View>
 
           <View style={styles.controlRow}>
