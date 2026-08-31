@@ -24,6 +24,16 @@ function isStandardService(uuid: string): boolean {
   return STANDARD_SKIP.has(uuid.substring(0, 8).toLowerCase());
 }
 
+export interface CharInfo {
+  uuid: string;
+  props: string[];
+}
+
+export interface ServiceInfo {
+  uuid: string;
+  chars: CharInfo[];
+}
+
 export interface DiscoveryResult {
   serviceUUID: string;
   charUUID: string;
@@ -42,9 +52,21 @@ class BioBleMgr {
 
   /** Exposed so the UI can show which UUIDs were found */
   public discoveryInfo: DiscoveryResult | null = null;
+  /** All discovered services for debug display */
+  public allServices: ServiceInfo[] = [];
+  /** Debug log lines visible in the UI */
+  public debugLog: string[] = [];
 
   constructor() {
     this.mgr = new BleManager();
+  }
+
+  private log(msg: string): void {
+    const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const line = `[${ts}] ${msg}`;
+    this.debugLog.push(line);
+    if (this.debugLog.length > 50) this.debugLog.shift();
+    console.log(msg);
   }
 
   async requestPermissions(): Promise<boolean> {
@@ -102,12 +124,17 @@ class BioBleMgr {
    * data characteristic automatically.
    */
   async connect(device: Device): Promise<Device> {
+    this.debugLog = [];
+    this.allServices = [];
+    this.log(`Connecting to ${device.name || device.id}...`);
     this.device = await device.connect({ requestMTU: 512 });
+    this.log('Connected, discovering services...');
     await this.device.discoverAllServicesAndCharacteristics();
+    this.log('Discovery complete');
 
     const found = await this.findDataCharacteristic();
     if (!found) {
-      console.warn('[BLE] Could not find a suitable data characteristic');
+      this.log('⚠ NO suitable data characteristic found!');
     }
 
     return this.device;
@@ -123,55 +150,69 @@ class BioBleMgr {
     if (!this.device) return false;
 
     const services: Service[] = await this.device.services();
-    console.log(`[BLE] Found ${services.length} services`);
+    this.log(`Found ${services.length} service(s)`);
 
-    // Pass 1 — match against known UUIDs
     const knownSvcSet = new Set(KNOWN_SERVICE_UUIDS.map(u => u.toLowerCase()));
     const knownCharSet = new Set(KNOWN_CHAR_UUIDS.map(u => u.toLowerCase()));
 
+    // Enumerate everything and store for debug display
     for (const svc of services) {
       const svcUuid = svc.uuid.toLowerCase();
-      console.log(`[BLE]   service: ${svcUuid}`);
       const chars = await svc.characteristics();
+      const charInfos: CharInfo[] = [];
 
       for (const ch of chars) {
         const chUuid = ch.uuid.toLowerCase();
-        const props = [];
-        if (ch.isNotifiable) props.push('NOTIFY');
-        if (ch.isIndicatable) props.push('INDICATE');
-        if (ch.isWritableWithoutResponse) props.push('WRITE_NR');
-        if (ch.isWritableWithResponse) props.push('WRITE');
-        if (ch.isReadable) props.push('READ');
-        console.log(`[BLE]     char: ${chUuid}  [${props.join(',')}]`);
+        const props: string[] = [];
+        if (ch.isNotifiable) props.push('N');
+        if (ch.isIndicatable) props.push('I');
+        if (ch.isWritableWithoutResponse) props.push('Wnr');
+        if (ch.isWritableWithResponse) props.push('W');
+        if (ch.isReadable) props.push('R');
+        charInfos.push({ uuid: chUuid, props });
+      }
 
-        if (knownSvcSet.has(svcUuid) || knownCharSet.has(chUuid)) {
-          if (ch.isNotifiable || ch.isIndicatable) {
+      this.allServices.push({ uuid: svcUuid, chars: charInfos });
+      this.log(`SVC ${svcUuid.substring(0, 8)}  (${charInfos.length} char)`);
+      for (const ci of charInfos) {
+        this.log(`  CHR ${ci.uuid.substring(0, 8)}  [${ci.props.join(',')}]`);
+      }
+    }
+
+    // Pass 1 — match against known UUIDs
+    for (const svc of this.allServices) {
+      for (const ch of svc.chars) {
+        if (knownSvcSet.has(svc.uuid) || knownCharSet.has(ch.uuid)) {
+          if (ch.props.includes('N') || ch.props.includes('I')) {
             this.serviceUUID = svc.uuid;
             this.charUUID = ch.uuid;
             this.discoveryInfo = { serviceUUID: svc.uuid, charUUID: ch.uuid, method: 'known' };
-            console.log(`[BLE] ✓ Matched known UUID  svc=${svc.uuid}  char=${ch.uuid}`);
+            this.log(`✓ MATCH known  svc=${svc.uuid}`);
+            this.log(`  char=${ch.uuid}`);
             return true;
+          } else {
+            this.log(`⚠ Known UUID found but NO notify prop: [${ch.props}]`);
           }
         }
       }
     }
 
-    // Pass 2 — auto-discover: first non-standard service with NOTIFY char
-    for (const svc of services) {
+    // Pass 2 — auto-discover
+    for (const svc of this.allServices) {
       if (isStandardService(svc.uuid)) continue;
-
-      const chars = await svc.characteristics();
-      for (const ch of chars) {
-        if (ch.isNotifiable || ch.isIndicatable) {
+      for (const ch of svc.chars) {
+        if (ch.props.includes('N') || ch.props.includes('I')) {
           this.serviceUUID = svc.uuid;
           this.charUUID = ch.uuid;
           this.discoveryInfo = { serviceUUID: svc.uuid, charUUID: ch.uuid, method: 'auto' };
-          console.log(`[BLE] ✓ Auto-discovered  svc=${svc.uuid}  char=${ch.uuid}`);
+          this.log(`✓ AUTO-DISCOVER  svc=${svc.uuid}`);
+          this.log(`  char=${ch.uuid}`);
           return true;
         }
       }
     }
 
+    this.log('✗ No NOTIFY/INDICATE characteristic found anywhere');
     return false;
   }
 
@@ -180,26 +221,37 @@ class BioBleMgr {
     onError?: (error: Error) => void,
   ): (() => void) | null {
     if (!this.device || !this.serviceUUID || !this.charUUID) {
+      const msg = `Subscribe fail: device=${!!this.device} svc=${this.serviceUUID} char=${this.charUUID}`;
+      this.log(msg);
       onError?.(new Error('未发现数据特征值，无法订阅通知'));
       return null;
     }
+
+    this.log(`Subscribing to ${this.charUUID.substring(0, 8)}...`);
+    let gotFirst = false;
 
     const sub = this.device.monitorCharacteristicForService(
       this.serviceUUID,
       this.charUUID,
       (error: any, characteristic: Characteristic | null) => {
         if (error) {
+          this.log(`Notify error: ${error.message || error}`);
           onError?.(error);
           return;
         }
         if (!characteristic?.value) return;
 
         const raw = Buffer.from(characteristic.value, 'base64');
+        if (!gotFirst) {
+          gotFirst = true;
+          this.log(`First data! ${raw.length} bytes: ${raw.toString('hex').substring(0, 40)}`);
+        }
         const pkt = parseBioPkt(new Uint8Array(raw));
         if (pkt) onData(pkt);
       },
     );
 
+    this.log('Subscribe OK, waiting for data...');
     return () => sub.remove();
   }
 
