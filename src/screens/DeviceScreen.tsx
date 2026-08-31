@@ -192,19 +192,19 @@ export default function DeviceScreen({ device, onDisconnect }: Props) {
           </View>
 
           <View style={styles.heroRow}>
-            <DataCard label="心率 (PPG)" value={data?.hr ? String(data.hr) : '--'} unit="BPM" color="#EF4444" large />
-            <DataCard label="心率 (ECG)" value={data?.ecgHr ? String(data.ecgHr) : '--'} unit="BPM" color="#F97316" large />
+            <DataCard label="心率 (PPG)" value={data != null ? String(data.hr) : '--'} unit="BPM" color="#EF4444" large />
+            <DataCard label="心率 (ECG)" value={data != null ? String(data.ecgHr) : '--'} unit="BPM" color="#F97316" large />
           </View>
 
           <View style={styles.grid}>
-            <DataCard label="血氧饱和度" value={data?.spo2 ? String(data.spo2) : '--'} unit="%" color="#3B82F6" />
-            <DataCard label="体温" value={data?.tempC ? data.tempC.toFixed(1) : '--'} unit="°C" color="#10B981" />
-            <DataCard label="收缩压" value={data?.sbp ? String(data.sbp) : '--'} unit="mmHg" color="#8B5CF6" />
-            <DataCard label="舒张压" value={data?.dbp ? String(data.dbp) : '--'} unit="mmHg" color="#A855F7" />
-            <DataCard label="灌注指数" value={data?.pi != null ? data.pi.toFixed(1) : '--'} unit="%" color="#14B8A6" />
-            <DataCard label="脉搏传导时间" value={data?.pttMs ? String(data.pttMs) : '--'} unit="ms" color="#F59E0B" />
-            <DataCard label="ECG信号质量" value={data?.ecgSig != null ? String(data.ecgSig) : '--'} unit="" color="#6366F1" />
-            <DataCard label="IR原始值" value={data?.ir ? String(data.ir) : '--'} unit="" color="#64748B" />
+            <DataCard label="血氧饱和度" value={data != null ? String(data.spo2) : '--'} unit="%" color="#3B82F6" />
+            <DataCard label="设备温度" value={data != null ? data.tempC.toFixed(1) : '--'} unit="°C" color="#10B981" />
+            <DataCard label="收缩压" value={data != null ? String(data.sbp) : '--'} unit="mmHg" color="#8B5CF6" />
+            <DataCard label="舒张压" value={data != null ? String(data.dbp) : '--'} unit="mmHg" color="#A855F7" />
+            <DataCard label="灌注指数" value={data != null ? data.pi.toFixed(1) : '--'} unit="%" color="#14B8A6" />
+            <DataCard label="脉搏传导时间" value={data != null ? String(data.pttMs) : '--'} unit="ms" color="#F59E0B" />
+            <DataCard label="ECG信号质量" value={data != null ? String(data.ecgSig) : '--'} unit="" color="#6366F1" />
+            <DataCard label="IR原始值" value={data != null ? String(data.ir) : '--'} unit="" color="#64748B" />
           </View>
 
           <View style={styles.ecgRawCard}>
