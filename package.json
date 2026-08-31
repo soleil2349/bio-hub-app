@@ -12,6 +12,7 @@
     "react-native-ble-plx": "^3.5.1"
   },
   "devDependencies": {
+    "@react-native-community/cli": "latest",
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
