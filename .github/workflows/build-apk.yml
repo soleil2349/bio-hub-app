@@ -32,9 +32,15 @@ jobs:
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install
 
-      - name: Install Android dependencies
-        working-directory: android
-        run: ./gradlew dependencies --quiet || true
+      - name: Bundle JS into APK assets
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res/
 
       - name: Build Debug APK
         working-directory: android
