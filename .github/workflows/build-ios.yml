@@ -1,0 +1,66 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Detect Xcode scheme
+        id: scheme
+        run: |
+          WS=$(ls ios/*.xcworkspace -d | head -1)
+          SCHEME=$(xcodebuild -workspace "$WS" -list 2>/dev/null | awk '/Schemes:/{found=1; next} found && NF{print; exit}' | xargs)
+          echo "ws=$WS" >> "$GITHUB_OUTPUT"
+          echo "name=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Workspace: $WS  Scheme: $SCHEME"
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild build \
+            -workspace "${{ steps.scheme.outputs.ws }}" \
+            -scheme "${{ steps.scheme.outputs.name }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM="" \
+            -quiet
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -maxdepth 1 | head -1)
+          echo "Found app: $APP_PATH"
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r BioHubApp-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: bio-hub-ios
+          path: BioHubApp-unsigned.ipa
+          retention-days: 30
