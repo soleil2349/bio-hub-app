@@ -5,31 +5,47 @@
 
 export const BLE_DEVICE_NAME = 'BIO_HUB';
 
-export const SERVICE_UUID = '0000abcd-0000-1000-8000-00805f9b34fb';
-export const CHARACTERISTIC_UUID = '0000bcde-0000-1000-8000-00805f9b34fb';
+/**
+ * The firmware registers GATT via SLE (Spark Link) which shares the
+ * database with BLE on Hi3863. The exact 128-bit UUID exposed to a
+ * standard BLE client depends on the SLE→BLE mapping inside the chip.
+ *
+ * We try several known patterns and fall back to auto-discovery.
+ */
+export const KNOWN_SERVICE_UUIDS = [
+  '0000abcd-0000-1000-8000-00805f9b34fb',          // standard BLE base
+  '37bea880-fc70-11ea-b720-00000000cdab',          // SLE base, LE short
+  '37bea880-fc70-11ea-b720-00000000abcd',          // SLE base, BE short
+];
+
+export const KNOWN_CHAR_UUIDS = [
+  '0000bcde-0000-1000-8000-00805f9b34fb',
+  '37bea880-fc70-11ea-b720-00000000debc',
+  '37bea880-fc70-11ea-b720-00000000bcde',
+];
 
 export const CMD_HEARTBEAT = 0;
 export const CMD_TOGGLE = 1;
 
 export interface BioPkt {
-  hr: number;        // PPG heart rate BPM
-  spo2: number;      // SpO2 %
-  ir: number;        // MAX30102 IR mean
-  tempC: number;     // chip temperature °C (combined integer + fraction)
-  pi: number;        // perfusion index (real value, e.g. 2.5)
-  sbp: number;       // systolic blood pressure mmHg
-  dbp: number;       // diastolic blood pressure mmHg
+  hr: number;
+  spo2: number;
+  ir: number;
+  tempC: number;
+  pi: number;
+  sbp: number;
+  dbp: number;
   flags: {
     maxOk: boolean;
     bmdOk: boolean;
     finger: boolean;
     pttValid: boolean;
   };
-  pttMs: number;     // pulse transit time ms
-  ecgHr: number;     // BMD101 heart rate BPM
-  ecgSig: number;    // ECG signal quality (0=best, 200=no contact)
-  ecgRaw: number;    // ECG raw sample
-  rrMs: number;      // R-R interval / diagnostics
+  pttMs: number;
+  ecgHr: number;
+  ecgSig: number;
+  ecgRaw: number;
+  rrMs: number;
 }
 
 /**

@@ -1,9 +1,9 @@
-import { BleManager, Device, Characteristic, State } from 'react-native-ble-plx';
+import { BleManager, Device, Characteristic, State, Service } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
 import { Buffer } from 'buffer';
 import {
-  SERVICE_UUID,
-  CHARACTERISTIC_UUID,
+  KNOWN_SERVICE_UUIDS,
+  KNOWN_CHAR_UUIDS,
   BLE_DEVICE_NAME,
   BioPkt,
   parseBioPkt,
@@ -12,12 +12,36 @@ import {
   CMD_TOGGLE,
 } from './protocol';
 
+/** Standard BLE UUIDs that should be skipped during auto-discovery */
+const STANDARD_SKIP = new Set([
+  '00001800', // Generic Access
+  '00001801', // Generic Attribute
+  '0000180a', // Device Information
+  '0000180f', // Battery Service
+]);
+
+function isStandardService(uuid: string): boolean {
+  return STANDARD_SKIP.has(uuid.substring(0, 8).toLowerCase());
+}
+
+export interface DiscoveryResult {
+  serviceUUID: string;
+  charUUID: string;
+  method: 'known' | 'auto';
+}
+
 class BioBleMgr {
   private mgr: BleManager;
   private device: Device | null = null;
   private ctrlSeq = 0;
   private startTime = Date.now();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  private serviceUUID: string | null = null;
+  private charUUID: string | null = null;
+
+  /** Exposed so the UI can show which UUIDs were found */
+  public discoveryInfo: DiscoveryResult | null = null;
 
   constructor() {
     this.mgr = new BleManager();
@@ -73,21 +97,96 @@ class BioBleMgr {
     this.mgr.stopDeviceScan();
   }
 
+  /**
+   * Connect to a device, discover services/characteristics, and locate the
+   * data characteristic automatically.
+   */
   async connect(device: Device): Promise<Device> {
     this.device = await device.connect({ requestMTU: 512 });
     await this.device.discoverAllServicesAndCharacteristics();
+
+    const found = await this.findDataCharacteristic();
+    if (!found) {
+      console.warn('[BLE] Could not find a suitable data characteristic');
+    }
+
     return this.device;
+  }
+
+  /**
+   * Walk all services/characteristics looking for our data channel.
+   * Strategy:
+   *   1. Check known UUID lists first.
+   *   2. Fall back to the first non-standard service with a NOTIFY characteristic.
+   */
+  private async findDataCharacteristic(): Promise<boolean> {
+    if (!this.device) return false;
+
+    const services: Service[] = await this.device.services();
+    console.log(`[BLE] Found ${services.length} services`);
+
+    // Pass 1 — match against known UUIDs
+    const knownSvcSet = new Set(KNOWN_SERVICE_UUIDS.map(u => u.toLowerCase()));
+    const knownCharSet = new Set(KNOWN_CHAR_UUIDS.map(u => u.toLowerCase()));
+
+    for (const svc of services) {
+      const svcUuid = svc.uuid.toLowerCase();
+      console.log(`[BLE]   service: ${svcUuid}`);
+      const chars = await svc.characteristics();
+
+      for (const ch of chars) {
+        const chUuid = ch.uuid.toLowerCase();
+        const props = [];
+        if (ch.isNotifiable) props.push('NOTIFY');
+        if (ch.isIndicatable) props.push('INDICATE');
+        if (ch.isWritableWithoutResponse) props.push('WRITE_NR');
+        if (ch.isWritableWithResponse) props.push('WRITE');
+        if (ch.isReadable) props.push('READ');
+        console.log(`[BLE]     char: ${chUuid}  [${props.join(',')}]`);
+
+        if (knownSvcSet.has(svcUuid) || knownCharSet.has(chUuid)) {
+          if (ch.isNotifiable || ch.isIndicatable) {
+            this.serviceUUID = svc.uuid;
+            this.charUUID = ch.uuid;
+            this.discoveryInfo = { serviceUUID: svc.uuid, charUUID: ch.uuid, method: 'known' };
+            console.log(`[BLE] ✓ Matched known UUID  svc=${svc.uuid}  char=${ch.uuid}`);
+            return true;
+          }
+        }
+      }
+    }
+
+    // Pass 2 — auto-discover: first non-standard service with NOTIFY char
+    for (const svc of services) {
+      if (isStandardService(svc.uuid)) continue;
+
+      const chars = await svc.characteristics();
+      for (const ch of chars) {
+        if (ch.isNotifiable || ch.isIndicatable) {
+          this.serviceUUID = svc.uuid;
+          this.charUUID = ch.uuid;
+          this.discoveryInfo = { serviceUUID: svc.uuid, charUUID: ch.uuid, method: 'auto' };
+          console.log(`[BLE] ✓ Auto-discovered  svc=${svc.uuid}  char=${ch.uuid}`);
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   subscribeToNotifications(
     onData: (pkt: BioPkt) => void,
     onError?: (error: Error) => void,
   ): (() => void) | null {
-    if (!this.device) return null;
+    if (!this.device || !this.serviceUUID || !this.charUUID) {
+      onError?.(new Error('未发现数据特征值，无法订阅通知'));
+      return null;
+    }
 
     const sub = this.device.monitorCharacteristicForService(
-      SERVICE_UUID,
-      CHARACTERISTIC_UUID,
+      this.serviceUUID,
+      this.charUUID,
       (error: any, characteristic: Characteristic | null) => {
         if (error) {
           onError?.(error);
@@ -105,14 +204,16 @@ class BioBleMgr {
   }
 
   private async writeCmd(cmd: number): Promise<void> {
-    if (!this.device) return;
+    if (!this.device || !this.serviceUUID || !this.charUUID) {
+      throw new Error('未连接或未发现特征值');
+    }
     const uptimeS = Math.floor((Date.now() - this.startTime) / 1000);
     const pkt = buildCtrlPkt(cmd, this.ctrlSeq++, uptimeS);
     const b64 = Buffer.from(pkt).toString('base64');
 
     await this.device.writeCharacteristicWithoutResponseForService(
-      SERVICE_UUID,
-      CHARACTERISTIC_UUID,
+      this.serviceUUID,
+      this.charUUID,
       b64,
     );
   }
@@ -141,6 +242,9 @@ class BioBleMgr {
 
   async disconnect(): Promise<void> {
     this.stopHeartbeatLoop();
+    this.serviceUUID = null;
+    this.charUUID = null;
+    this.discoveryInfo = null;
     if (this.device) {
       try {
         await this.device.cancelConnection();
@@ -154,6 +258,9 @@ class BioBleMgr {
     const sub = this.mgr.onDeviceDisconnected(this.device.id, () => {
       this.stopHeartbeatLoop();
       this.device = null;
+      this.serviceUUID = null;
+      this.charUUID = null;
+      this.discoveryInfo = null;
       callback();
     });
     return () => sub.remove();

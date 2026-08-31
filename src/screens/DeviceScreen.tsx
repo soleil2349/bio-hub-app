@@ -9,7 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { Device } from 'react-native-ble-plx';
-import { bioBleMgr } from '../ble-manager';
+import { bioBleMgr, DiscoveryResult } from '../ble-manager';
 import { BioPkt } from '../protocol';
 
 interface Props {
@@ -61,16 +61,21 @@ export default function DeviceScreen({ device, onDisconnect }: Props) {
   const [data, setData] = useState<BioPkt | null>(null);
   const [paused, setPaused] = useState(false);
   const [pktCount, setPktCount] = useState(0);
+  const [discovery, setDiscovery] = useState<DiscoveryResult | null>(
+    bioBleMgr.discoveryInfo,
+  );
   const cleanupRef = useRef<(() => void) | null>(null);
   const disconnectRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
+    setDiscovery(bioBleMgr.discoveryInfo);
+
     cleanupRef.current = bioBleMgr.subscribeToNotifications(
       (pkt) => {
         setData(pkt);
         setPktCount((c) => c + 1);
       },
-      (err) => console.warn('Notification error:', err),
+      (err) => Alert.alert('通知错误', err.message),
     );
 
     bioBleMgr.startHeartbeatLoop();
@@ -110,7 +115,15 @@ export default function DeviceScreen({ device, onDisconnect }: Props) {
           <Text style={styles.title}>{deviceName}</Text>
           <Text style={styles.subtitle}>
             已连接 · 收到 {pktCount} 个数据包
+            {discovery
+              ? ` · ${discovery.method === 'known' ? '已知' : '自动发现'}UUID`
+              : ' · 未发现特征值'}
           </Text>
+          {discovery && (
+            <Text style={styles.uuidHint} numberOfLines={1}>
+              {discovery.charUUID.substring(0, 8)}...
+            </Text>
+          )}
         </View>
         <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnect}>
           <Text style={styles.disconnectText}>断开</Text>
@@ -245,6 +258,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6B7280',
     marginTop: 2,
+  },
+  uuidHint: {
+    fontSize: 10,
+    color: '#4B5563',
+    fontFamily: 'monospace',
+    marginTop: 1,
   },
   disconnectBtn: {
     backgroundColor: '#7F1D1D',
