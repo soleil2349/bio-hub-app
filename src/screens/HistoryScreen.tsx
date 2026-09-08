@@ -23,6 +23,7 @@ import {
   exportSessionCSV,
 } from '../storage';
 import { formatDuration, formatTime } from '../analysis';
+import { bioHubAPI, AnalysisReport } from '../api';
 
 export default function HistoryScreen() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -81,6 +82,33 @@ export default function HistoryScreen() {
       );
     } catch (err: any) {
       Alert.alert('导出失败', err.message);
+    }
+  };
+
+  const handleUpload = async (session: Session) => {
+    if (!bioHubAPI.isConfigured()) {
+      Alert.alert('未配置服务器', '请先在「云服务」页面配置服务器地址');
+      return;
+    }
+    const result = await bioHubAPI.uploadSession(session);
+    if (result.success) {
+      Alert.alert('上传成功', result.message);
+    } else {
+      Alert.alert('上传失败', result.message);
+    }
+  };
+
+  const handleLocalAnalysis = async (session: Session) => {
+    const report = await bioHubAPI.generateLocalReport(session.id);
+    if (report) {
+      const score = report.healthScore;
+      const color = score >= 80 ? '良好' : score >= 60 ? '一般' : '需关注';
+      Alert.alert(
+        `健康评分: ${score} (${color})`,
+        `${report.summary}\n\n${report.recommendations.join('\n')}`,
+      );
+    } else {
+      Alert.alert('分析失败', '无法生成分析报告');
     }
   };
 
@@ -162,6 +190,20 @@ export default function HistoryScreen() {
                   {renderStatItem('温度', `${sessionStats.tempAvg}\u00B0C`, '#10B981')}
                   {renderStatItem('血压', `${sessionStats.sbpAvg}/${sessionStats.dbpAvg}`, '#8B5CF6')}
                   {renderStatItem('灌注指数', `${sessionStats.piAvg}%`, '#14B8A6')}
+                </View>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={() => handleLocalAnalysis(item)}
+                  >
+                    <Text style={styles.actionBtnText}>本地分析</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={() => handleUpload(item)}
+                  >
+                    <Text style={styles.actionBtnText}>上传</Text>
+                  </TouchableOpacity>
                 </View>
                 <View style={styles.actionRow}>
                   <TouchableOpacity

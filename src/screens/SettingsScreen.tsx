@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { clearAllData } from '../storage';
+import { bioHubAPI } from '../api';
 
 const SETTINGS_KEY = '@biohub_settings';
 
@@ -22,6 +23,8 @@ export interface AppSettings {
   showDebugOnConnect: boolean;
   preferSLE: boolean;
   scanDuration: number;
+  serverUrl: string;
+  apiKey: string;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -29,6 +32,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   showDebugOnConnect: false,
   preferSLE: false,
   scanDuration: 10,
+  serverUrl: '',
+  apiKey: '',
 };
 
 async function loadSettings(): Promise<AppSettings> {
@@ -180,6 +185,30 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Server Settings */}
+        <Text style={styles.sectionTitle}>云服务</Text>
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.settingRow}
+            onPress={() => {
+              Alert.alert(
+                '服务器配置',
+                '请在「云服务」页面中配置服务器地址和 API 密钥。\n\n切换到「云服务」标签页即可进行配置。',
+              );
+            }}
+          >
+            <View style={styles.settingInfo}>
+              <Text style={styles.settingLabel}>服务器配置</Text>
+              <Text style={styles.settingDesc}>
+                {bioHubAPI.isConfigured()
+                  ? `已配置: ${bioHubAPI.getConfig().baseUrl}`
+                  : '未配置 - 前往云服务页面设置'}
+              </Text>
+            </View>
+            <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Data Management */}
         <Text style={styles.sectionTitle}>数据管理</Text>
         <View style={styles.card}>
@@ -203,7 +232,7 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <View style={styles.aboutRow}>
             <Text style={styles.aboutLabel}>版本</Text>
-            <Text style={styles.aboutValue}>1.1.0</Text>
+            <Text style={styles.aboutValue}>1.2.0</Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.aboutRow}>
