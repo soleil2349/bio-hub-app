@@ -1,23 +1,35 @@
+/**
+ * BLE/SLE manager singleton for BIO_HUB sensor communication.
+ *
+ * Handles scanning, connection, GATT discovery, notifications, and control.
+ * Supports both standard BLE and SLE (SparkLink/NearLink) connections
+ * through the Hi3863 BLE compatibility layer.
+ */
 import { BleManager, Device, Characteristic, State, Service } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
 import { Buffer } from 'buffer';
 import {
   KNOWN_SERVICE_UUIDS,
   KNOWN_CHAR_UUIDS,
+  BLE_SERVICE_UUIDS,
+  SLE_SERVICE_UUIDS,
   BLE_DEVICE_NAME,
+  SLE_DEVICE_NAME,
   BioPkt,
+  ConnectionType,
   parseBioPkt,
   buildCtrlPkt,
+  detectConnectionType,
   CMD_HEARTBEAT,
   CMD_TOGGLE,
 } from './protocol';
 
 /** Standard BLE UUIDs that should be skipped during auto-discovery */
 const STANDARD_SKIP = new Set([
-  '00001800', // Generic Access
-  '00001801', // Generic Attribute
-  '0000180a', // Device Information
-  '0000180f', // Battery Service
+  '00001800',
+  '00001801',
+  '0000180a',
+  '0000180f',
 ]);
 
 function isStandardService(uuid: string): boolean {
@@ -38,6 +50,7 @@ export interface DiscoveryResult {
   serviceUUID: string;
   charUUID: string;
   method: 'known' | 'auto';
+  connectionType: ConnectionType;
 }
 
 class BioBleMgr {
@@ -65,8 +78,13 @@ class BioBleMgr {
     const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
     const line = `[${ts}] ${msg}`;
     this.debugLog.push(line);
-    if (this.debugLog.length > 50) this.debugLog.shift();
+    if (this.debugLog.length > 80) this.debugLog.shift();
     console.log(msg);
+  }
+
+  /** Get the detected connection type for the current session */
+  getConnectionType(): ConnectionType {
+    return this.discoveryInfo?.connectionType ?? 'unknown';
   }
 
   async requestPermissions(): Promise<boolean> {
@@ -106,8 +124,10 @@ class BioBleMgr {
     onDevice: (device: Device) => void,
     onError?: (error: Error) => void,
   ): void {
+    this.log('Starting BLE/SLE scan...');
     this.mgr.startDeviceScan(null, { allowDuplicates: false }, (err, dev) => {
       if (err) {
+        this.log(`Scan error: ${err.message}`);
         onError?.(err);
         return;
       }
@@ -121,20 +141,30 @@ class BioBleMgr {
 
   /**
    * Connect to a device, discover services/characteristics, and locate the
-   * data characteristic automatically.
+   * data characteristic automatically. Works for both BLE and SLE devices.
    */
   async connect(device: Device): Promise<Device> {
     this.debugLog = [];
     this.allServices = [];
-    this.log(`Connecting to ${device.name || device.id}...`);
+
+    const name = device.localName || device.name || device.id;
+    const isSLEName = name.includes(SLE_DEVICE_NAME);
+    this.log(`Connecting to ${name}...`);
+    if (isSLEName) {
+      this.log('(Device name suggests SLE/NearLink connection)');
+    }
+
     this.device = await device.connect({ requestMTU: 512 });
-    this.log('Connected, discovering services...');
+    this.log('Connected, discovering GATT services...');
     await this.device.discoverAllServicesAndCharacteristics();
-    this.log('Discovery complete');
+    this.log('GATT discovery complete');
 
     const found = await this.findDataCharacteristic();
     if (!found) {
-      this.log('⚠ NO suitable data characteristic found!');
+      this.log('!! NO suitable data characteristic found!');
+    } else {
+      const type = this.discoveryInfo?.connectionType ?? 'unknown';
+      this.log(`Connection type: ${type === 'SLE' ? 'SLE (NearLink/SparkLink)' : type === 'BLE' ? 'BLE (Bluetooth)' : 'Unknown (auto-discovered)'}`);
     }
 
     return this.device;
@@ -143,8 +173,9 @@ class BioBleMgr {
   /**
    * Walk all services/characteristics looking for our data channel.
    * Strategy:
-   *   1. Check known UUID lists first.
-   *   2. Fall back to the first non-standard service with a NOTIFY characteristic.
+   *   1. Check BLE-native UUIDs first.
+   *   2. Check SLE UUIDs next.
+   *   3. Fall back to first non-standard service with a NOTIFY characteristic.
    */
   private async findDataCharacteristic(): Promise<boolean> {
     if (!this.device) return false;
@@ -152,10 +183,9 @@ class BioBleMgr {
     const services: Service[] = await this.device.services();
     this.log(`Found ${services.length} service(s)`);
 
-    const knownSvcSet = new Set(KNOWN_SERVICE_UUIDS.map(u => u.toLowerCase()));
-    const knownCharSet = new Set(KNOWN_CHAR_UUIDS.map(u => u.toLowerCase()));
+    const knownSvcSet = new Set(KNOWN_SERVICE_UUIDS.map((u) => u.toLowerCase()));
+    const knownCharSet = new Set(KNOWN_CHAR_UUIDS.map((u) => u.toLowerCase()));
 
-    // Enumerate everything and store for debug display
     for (const svc of services) {
       const svcUuid = svc.uuid.toLowerCase();
       const chars = await svc.characteristics();
@@ -179,40 +209,93 @@ class BioBleMgr {
       }
     }
 
-    // Pass 1 — match against known UUIDs
+    // Pass 1 — match BLE-native UUIDs (priority)
+    const bleServiceSet = new Set(BLE_SERVICE_UUIDS.map((u) => u.toLowerCase()));
     for (const svc of this.allServices) {
-      for (const ch of svc.chars) {
-        if (knownSvcSet.has(svc.uuid) || knownCharSet.has(ch.uuid)) {
-          if (ch.props.includes('N') || ch.props.includes('I')) {
-            this.serviceUUID = svc.uuid;
-            this.charUUID = ch.uuid;
-            this.discoveryInfo = { serviceUUID: svc.uuid, charUUID: ch.uuid, method: 'known' };
-            this.log(`✓ MATCH known  svc=${svc.uuid}`);
-            this.log(`  char=${ch.uuid}`);
-            return true;
-          } else {
-            this.log(`⚠ Known UUID found but NO notify prop: [${ch.props}]`);
-          }
-        }
-      }
-    }
-
-    // Pass 2 — auto-discover
-    for (const svc of this.allServices) {
-      if (isStandardService(svc.uuid)) continue;
+      if (!bleServiceSet.has(svc.uuid)) continue;
       for (const ch of svc.chars) {
         if (ch.props.includes('N') || ch.props.includes('I')) {
           this.serviceUUID = svc.uuid;
           this.charUUID = ch.uuid;
-          this.discoveryInfo = { serviceUUID: svc.uuid, charUUID: ch.uuid, method: 'auto' };
-          this.log(`✓ AUTO-DISCOVER  svc=${svc.uuid}`);
+          this.discoveryInfo = {
+            serviceUUID: svc.uuid,
+            charUUID: ch.uuid,
+            method: 'known',
+            connectionType: 'BLE',
+          };
+          this.log(`[BLE] MATCH  svc=${svc.uuid}`);
           this.log(`  char=${ch.uuid}`);
           return true;
         }
       }
     }
 
-    this.log('✗ No NOTIFY/INDICATE characteristic found anywhere');
+    // Pass 2 — match SLE UUIDs
+    const sleServiceSet = new Set(SLE_SERVICE_UUIDS.map((u) => u.toLowerCase()));
+    for (const svc of this.allServices) {
+      if (!sleServiceSet.has(svc.uuid)) continue;
+      for (const ch of svc.chars) {
+        if (ch.props.includes('N') || ch.props.includes('I')) {
+          this.serviceUUID = svc.uuid;
+          this.charUUID = ch.uuid;
+          this.discoveryInfo = {
+            serviceUUID: svc.uuid,
+            charUUID: ch.uuid,
+            method: 'known',
+            connectionType: 'SLE',
+          };
+          this.log(`[SLE] MATCH  svc=${svc.uuid}`);
+          this.log(`  char=${ch.uuid}`);
+          return true;
+        }
+      }
+    }
+
+    // Pass 3 — match any known char UUID
+    for (const svc of this.allServices) {
+      for (const ch of svc.chars) {
+        if (knownSvcSet.has(svc.uuid) || knownCharSet.has(ch.uuid)) {
+          if (ch.props.includes('N') || ch.props.includes('I')) {
+            this.serviceUUID = svc.uuid;
+            this.charUUID = ch.uuid;
+            const connType = detectConnectionType(svc.uuid, ch.uuid);
+            this.discoveryInfo = {
+              serviceUUID: svc.uuid,
+              charUUID: ch.uuid,
+              method: 'known',
+              connectionType: connType,
+            };
+            this.log(`[${connType}] MATCH  svc=${svc.uuid}`);
+            this.log(`  char=${ch.uuid}`);
+            return true;
+          } else {
+            this.log(`!! Known UUID found but NO notify prop: [${ch.props}]`);
+          }
+        }
+      }
+    }
+
+    // Pass 4 — auto-discover any non-standard NOTIFY characteristic
+    for (const svc of this.allServices) {
+      if (isStandardService(svc.uuid)) continue;
+      for (const ch of svc.chars) {
+        if (ch.props.includes('N') || ch.props.includes('I')) {
+          this.serviceUUID = svc.uuid;
+          this.charUUID = ch.uuid;
+          this.discoveryInfo = {
+            serviceUUID: svc.uuid,
+            charUUID: ch.uuid,
+            method: 'auto',
+            connectionType: 'unknown',
+          };
+          this.log(`[AUTO] DISCOVER  svc=${svc.uuid}`);
+          this.log(`  char=${ch.uuid}`);
+          return true;
+        }
+      }
+    }
+
+    this.log('!! No NOTIFY/INDICATE characteristic found anywhere');
     return false;
   }
 

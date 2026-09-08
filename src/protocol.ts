@@ -1,29 +1,55 @@
 /**
- * BLE protocol definitions for BIO_HUB (sensor_hub) board.
+ * BLE/SLE protocol definitions for BIO_HUB (sensor_hub) board.
  * Matches bio_pkt.h V2 on the firmware side.
+ *
+ * Supports both standard BLE and SLE (SparkLink/NearLink) connections.
+ * On Hi3863, SLE GATT shares the database with BLE, so the mobile app
+ * uses BLE APIs but may encounter SLE-specific UUIDs.
  */
+
+/* ─── Device Name Patterns ─── */
 
 export const BLE_DEVICE_NAME = 'BIO_HUB';
+export const SLE_DEVICE_NAME = 'BIO_HUB_SLE';
 
-/**
- * The firmware registers GATT via SLE (Spark Link) which shares the
- * database with BLE on Hi3863. The exact 128-bit UUID exposed to a
- * standard BLE client depends on the SLE→BLE mapping inside the chip.
- *
- * We try several known patterns and fall back to auto-discovery.
- */
-export const KNOWN_SERVICE_UUIDS = [
-  '0000fbb0-0000-1000-8000-00805f9b34fb',          // independent BLE GATT service
-  '0000abcd-0000-1000-8000-00805f9b34fb',          // SLE shared (fallback)
+/** All known device name patterns (used for scan filtering & highlight) */
+export const KNOWN_DEVICE_NAMES = [BLE_DEVICE_NAME, SLE_DEVICE_NAME];
+
+/* ─── Connection Type ─── */
+
+export type ConnectionType = 'BLE' | 'SLE' | 'unknown';
+
+/* ─── BLE GATT UUIDs (standard Bluetooth) ─── */
+
+export const BLE_SERVICE_UUIDS = [
+  '0000fbb0-0000-1000-8000-00805f9b34fb',
 ];
 
-export const KNOWN_CHAR_UUIDS = [
-  '0000fbb1-0000-1000-8000-00805f9b34fb',          // independent BLE GATT char
-  '0000cdef-0000-1000-8000-00805f9b34fb',          // SLE shared (fallback)
+export const BLE_CHAR_UUIDS = [
+  '0000fbb1-0000-1000-8000-00805f9b34fb',
 ];
+
+/* ─── SLE GATT UUIDs (SparkLink / NearLink / 星闪) ─── */
+
+export const SLE_SERVICE_UUIDS = [
+  '0000abcd-0000-1000-8000-00805f9b34fb',
+];
+
+export const SLE_CHAR_UUIDS = [
+  '0000cdef-0000-1000-8000-00805f9b34fb',
+];
+
+/* ─── Combined UUID Lists ─── */
+
+export const KNOWN_SERVICE_UUIDS = [...BLE_SERVICE_UUIDS, ...SLE_SERVICE_UUIDS];
+export const KNOWN_CHAR_UUIDS = [...BLE_CHAR_UUIDS, ...SLE_CHAR_UUIDS];
+
+/* ─── Control Commands ─── */
 
 export const CMD_HEARTBEAT = 0;
 export const CMD_TOGGLE = 1;
+
+/* ─── Sensor Data Packet ─── */
 
 export interface BioPkt {
   hr: number;
@@ -47,13 +73,13 @@ export interface BioPkt {
 }
 
 /**
- * Parse 20-byte bio_pkt_t from BLE notification.
+ * Parse 20-byte bio_pkt_t from BLE/SLE notification.
  * Layout (little-endian, packed):
  *   [0]    uint8   hr
  *   [1]    uint8   spo2
  *   [2-5]  uint32  ir
  *   [6]    int8    temp_i
- *   [7]    uint8   temp_f (low 4 bits × 0.0625)
+ *   [7]    uint8   temp_f (low 4 bits * 0.0625)
  *   [8]    uint8   pi_x10
  *   [9]    uint8   sbp
  *   [10]   uint8   dbp
@@ -124,4 +150,36 @@ export function buildCtrlPkt(
   buf[1] = seq & 0xff;
   view.setUint16(2, uptimeS & 0xffff, true);
   return buf;
+}
+
+/**
+ * Detect connection type from matched UUID.
+ * Checks if the UUID belongs to BLE-native or SLE (NearLink) UUID sets.
+ */
+export function detectConnectionType(serviceUUID: string, charUUID: string): ConnectionType {
+  const svc = serviceUUID.toLowerCase();
+  const ch = charUUID.toLowerCase();
+
+  const bleServiceSet = new Set(BLE_SERVICE_UUIDS.map((u) => u.toLowerCase()));
+  const bleCharSet = new Set(BLE_CHAR_UUIDS.map((u) => u.toLowerCase()));
+  const sleServiceSet = new Set(SLE_SERVICE_UUIDS.map((u) => u.toLowerCase()));
+  const sleCharSet = new Set(SLE_CHAR_UUIDS.map((u) => u.toLowerCase()));
+
+  if (bleServiceSet.has(svc) || bleCharSet.has(ch)) return 'BLE';
+  if (sleServiceSet.has(svc) || sleCharSet.has(ch)) return 'SLE';
+  return 'unknown';
+}
+
+/**
+ * Check if a device name matches known BIO_HUB patterns.
+ * Returns the expected connection type based on name.
+ */
+export function matchDeviceName(name: string | null): {
+  isMatch: boolean;
+  expectedType: ConnectionType;
+} {
+  if (!name) return { isMatch: false, expectedType: 'unknown' };
+  if (name.includes(SLE_DEVICE_NAME)) return { isMatch: true, expectedType: 'SLE' };
+  if (name.includes(BLE_DEVICE_NAME)) return { isMatch: true, expectedType: 'BLE' };
+  return { isMatch: false, expectedType: 'unknown' };
 }

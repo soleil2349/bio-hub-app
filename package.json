@@ -1,15 +1,20 @@
 {
   "name": "bio_hub_app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "index.ts",
   "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
     "buffer": "^6.0.3",
     "expo": "~57.0.18",
     "expo-build-properties": "*",
+    "expo-file-system": "~57.0.6",
+    "expo-sharing": "~57.0.18",
+    "expo-sqlite": "~57.0.2",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.3",
-    "react-native-ble-plx": "^3.5.1"
+    "react-native-ble-plx": "^3.5.1",
+    "react-native-svg": "15.15.4"
   },
   "devDependencies": {
     "@react-native-community/cli": "latest",
