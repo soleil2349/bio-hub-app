@@ -26,10 +26,16 @@ import {
 } from '../api';
 import { Session, getAllSessions } from '../storage';
 import { formatTime, formatDuration } from '../analysis';
+import { authStore, AuthUser } from '../auth';
 
 type ViewMode = 'sessions' | 'reports';
 
-export default function CloudScreen() {
+interface Props {
+  /** 未登录时点击提示条回调，由 App 切换到登录页 */
+  onRequireLogin?: () => void;
+}
+
+export default function CloudScreen({ onRequireLogin }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [reports, setReports] = useState<AnalysisReport[]>([]);
@@ -40,6 +46,7 @@ export default function CloudScreen() {
   const [showConfig, setShowConfig] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [selectedReport, setSelectedReport] = useState<AnalysisReport | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(authStore.getUser());
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -67,6 +74,11 @@ export default function CloudScreen() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    const unsub = authStore.subscribe((s) => setUser(s?.user ?? null));
+    return unsub;
+  }, []);
 
   const checkConnection = async () => {
     setChecking(true);
@@ -487,6 +499,19 @@ export default function CloudScreen() {
         )}
       </View>
 
+      {/* 未登录提示（离线模式）：登录后才可上传与分析 */}
+      {!user && (
+        <TouchableOpacity
+          style={styles.loginBanner}
+          onPress={onRequireLogin}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.loginBannerText}>
+            未登录（离线模式）· 点此登录后可上传数据与查看报告
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {/* View Mode Toggle */}
       <View style={styles.modeBar}>
         <TouchableOpacity
@@ -563,6 +588,17 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 24, fontWeight: '800', color: '#E0E7FF' },
   subtitle: { fontSize: 13, color: '#6B7280', marginTop: 4 },
+  loginBanner: {
+    backgroundColor: '#1E293B',
+    borderColor: '#334155',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginHorizontal: 20,
+    marginTop: 12,
+  },
+  loginBannerText: { color: '#93C5FD', fontSize: 12, textAlign: 'center' },
   configToggle: {
     backgroundColor: '#1E3A5F',
     paddingHorizontal: 14,

@@ -51,7 +51,12 @@ async function saveSettings(settings: AppSettings): Promise<void> {
 
 export { loadSettings };
 
-export default function SettingsScreen() {
+interface Props {
+  /** 访客（未登录）模式下点击「登录 / 注册」时回调，由 App 切换登录页 */
+  onRequireLogin?: () => void;
+}
+
+export default function SettingsScreen({ onRequireLogin }: Props) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [user, setUser] = useState<AuthUser | null>(authStore.getUser());
   const [showChangePwd, setShowChangePwd] = useState(false);
@@ -146,7 +151,7 @@ export default function SettingsScreen() {
           <View style={styles.settingRow}>
             <View style={styles.settingInfo}>
               <Text style={styles.settingLabel}>
-                {user?.displayName || user?.email || '未登录'}
+                {user?.displayName || user?.email || '未登录（离线模式）'}
               </Text>
               {user?.displayName && (
                 <Text style={styles.settingDesc}>{user.email}</Text>
@@ -156,22 +161,39 @@ export default function SettingsScreen() {
               )}
             </View>
           </View>
-          <View style={styles.divider} />
-          <TouchableOpacity
-            style={styles.settingRow}
-            onPress={() => setShowChangePwd(true)}
-          >
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>修改密码</Text>
-              <Text style={styles.settingDesc}>更改登录密码</Text>
-            </View>
-            <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
-          </TouchableOpacity>
-          <View style={styles.divider} />
-          <TouchableOpacity style={styles.dangerRow} onPress={handleLogout}>
-            <Text style={styles.dangerLabel}>退出登录</Text>
-            <Text style={styles.dangerDesc}>退出后需要重新登录才能查看数据</Text>
-          </TouchableOpacity>
+          {user ? (
+            <>
+              <View style={styles.divider} />
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={() => setShowChangePwd(true)}
+              >
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>修改密码</Text>
+                  <Text style={styles.settingDesc}>更改登录密码</Text>
+                </View>
+                <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
+              </TouchableOpacity>
+              <View style={styles.divider} />
+              <TouchableOpacity style={styles.dangerRow} onPress={handleLogout}>
+                <Text style={styles.dangerLabel}>退出登录</Text>
+                <Text style={styles.dangerDesc}>退出后需要重新登录才能查看数据</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <View style={styles.divider} />
+              <TouchableOpacity style={styles.settingRow} onPress={onRequireLogin}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>登录 / 注册</Text>
+                  <Text style={styles.settingDesc}>
+                    登录后可上传数据到云端并查看分析报告
+                  </Text>
+                </View>
+                <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* Recording Settings */}

@@ -10,6 +10,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Device } from 'react-native-ble-plx';
 import ScanScreen from './src/screens/ScanScreen';
 import DeviceScreen from './src/screens/DeviceScreen';
@@ -24,21 +25,30 @@ import { authStore, AuthSession } from './src/auth';
 
 type MainTab = 'scan' | 'cloud' | 'history' | 'settings';
 
+/** 访客（离线）模式标记：未登录也可使用蓝牙采集与本地分析 */
+const GUEST_KEY = '@biohub_guest_mode';
+
 export default function App() {
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [activeTab, setActiveTab] = useState<MainTab>('scan');
   const [dbReady, setDbReady] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
+  /** 用户选择了「跳过登录，离线使用」（持久化，下次启动不再拦在登录页） */
+  const [guestMode, setGuestMode] = useState(false);
+  /** 访客模式下主动点「登录」时临时展示登录页 */
+  const [showAuth, setShowAuth] = useState(false);
 
   useEffect(() => {
     Promise.all([
       initDatabase(),
       loadSettings(),
       bioHubAPI.init(),
-    ]).then(([_, s]) => {
+      AsyncStorage.getItem(GUEST_KEY).catch(() => null),
+    ]).then(([_, s, __, guest]) => {
       setSettings(s);
       setSession(authStore.getSession());
+      setGuestMode(guest === '1');
       setDbReady(true);
     }).catch((err) => {
       console.error('Init error:', err);
@@ -57,6 +67,19 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  const handleAuthed = () => {
+    setShowAuth(false);
+    setGuestMode(false);
+    AsyncStorage.removeItem(GUEST_KEY).catch(() => {});
+    setSession(authStore.getSession());
+  };
+
+  const enterGuestMode = () => {
+    setShowAuth(false);
+    setGuestMode(true);
+    AsyncStorage.setItem(GUEST_KEY, '1').catch(() => {});
+  };
+
   if (!dbReady) {
     return (
       <View style={styles.splash}>
@@ -68,8 +91,9 @@ export default function App() {
     );
   }
 
-  if (!session) {
-    return <AuthScreen onAuthed={() => setSession(authStore.getSession())} />;
+  // 未登录且未选择离线模式（或访客主动去登录）→ 登录页；登录页提供「跳过登录」入口
+  if (!session && (!guestMode || showAuth)) {
+    return <AuthScreen onAuthed={handleAuthed} onSkip={enterGuestMode} />;
   }
 
   if (connectedDevice) {
@@ -94,9 +118,9 @@ export default function App() {
             scanDuration={settings?.scanDuration ?? 10}
           />
         )}
-        {activeTab === 'cloud' && <CloudScreen />}
+        {activeTab === 'cloud' && <CloudScreen onRequireLogin={() => setShowAuth(true)} />}
         {activeTab === 'history' && <HistoryScreen />}
-        {activeTab === 'settings' && <SettingsScreen />}
+        {activeTab === 'settings' && <SettingsScreen onRequireLogin={() => setShowAuth(true)} />}
       </View>
       <TabBar
         tabs={[

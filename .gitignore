@@ -13,3 +13,8 @@ android/
 ios/
 .env
 .env.*
+
+# 构建产物与本地日志（不入库）
+builds/
+*.log
+scripts_ci_poll.py

@@ -24,9 +24,11 @@ type Mode = 'login' | 'register';
 
 interface Props {
   onAuthed: () => void;
+  /** 跳过登录，直接以离线（访客）模式使用 App */
+  onSkip?: () => void;
 }
 
-export default function AuthScreen({ onAuthed }: Props) {
+export default function AuthScreen({ onAuthed, onSkip }: Props) {
   const [mode, setMode] = useState<Mode>('login');
   const [serverUrl, setServerUrl] = useState('');
   const [showServerEdit, setShowServerEdit] = useState(false);
@@ -257,6 +259,16 @@ export default function AuthScreen({ onAuthed }: Props) {
               {mode === 'login' ? '还没有账户？点此注册' : '已有账户？点此登录'}
             </Text>
           </TouchableOpacity>
+
+          {/* 离线模式入口：无网络 / 服务器不可用时也能使用蓝牙采集与本地分析 */}
+          {onSkip && (
+            <TouchableOpacity onPress={onSkip} style={styles.skipBtn} activeOpacity={0.7}>
+              <Text style={styles.skipBtnText}>跳过登录，离线使用</Text>
+              <Text style={styles.skipBtnHint}>
+                蓝牙采集与本地分析无需登录，随时可在「设置」中登录
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={styles.footer}>
@@ -375,6 +387,22 @@ const styles = StyleSheet.create({
   primaryBtnText: { color: '#E0E7FF', fontWeight: '700', fontSize: 15 },
   switchLink: { marginTop: 16, alignItems: 'center' },
   switchLinkText: { color: '#60A5FA', fontSize: 13 },
+  skipBtn: {
+    marginTop: 22,
+    borderColor: '#374151',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  skipBtnText: { color: '#9CA3AF', fontSize: 14, fontWeight: '600' },
+  skipBtnHint: {
+    color: '#4B5563',
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: 'center',
+  },
   footer: {
     color: '#4B5563',
     fontSize: 11,
