@@ -1,25 +1,26 @@
 /**
  * BIO HUB Cloud API Client
  *
- * Abstraction layer for server communication. Designed to work with any
- * future backend. When no server is configured, operates in offline/mock mode.
- *
- * Features:
+ * Talks to the FastAPI backend at ``bio_hub_server/``. Handles:
+ *   - Auth (register / login / me / change-password)
  *   - Session data upload (bulk measurements)
  *   - Analysis report retrieval
  *   - Server health check
- *   - Configurable server URL
- *   - Automatic retry with exponential backoff
- *   - Offline queue for uploads when server is unavailable
+ *   - Local report generation (offline fallback)
+ *
+ * Auth model:
+ *   * A JWT bearer token is stored via ``authStore`` (src/auth.ts).
+ *   * Endpoints that need auth automatically get an ``Authorization`` header.
+ *   * A 401 response clears the local session so the UI can react.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { authStore, AuthSession, AuthUser } from './auth';
 import { Session, SessionStats, getSessionStats, getSessionMeasurements } from './storage';
 
 /* ─── Types ─── */
 
 export interface ServerConfig {
   baseUrl: string;
-  apiKey: string;
   timeout: number;
 }
 
@@ -117,13 +118,22 @@ export interface UploadRecord {
 
 /* ─── Constants ─── */
 
-const CONFIG_KEY = '@biohub_server_config';
+const CONFIG_KEY = '@biohub_server_config_v2';
 const UPLOADS_KEY = '@biohub_upload_records';
 
 const DEFAULT_CONFIG: ServerConfig = {
-  baseUrl: '',
-  apiKey: '',
+  // Ship with a default so first-run users can register immediately.
+  baseUrl: 'http://156.226.176.22',
   timeout: 30000,
+};
+
+/* ─── Internal request result type ─── */
+
+type Req<T> = {
+  ok: boolean;
+  data?: T;
+  error?: string;
+  status?: number;
 };
 
 /* ─── API Client ─── */
@@ -133,7 +143,7 @@ class BioHubAPI {
   private uploadRecords: Map<number, UploadRecord> = new Map();
   private initialized = false;
 
-  /** Initialize: load config and upload records from storage */
+  /** Initialize: load config, upload records and auth session from storage. */
   async init(): Promise<void> {
     if (this.initialized) return;
     try {
@@ -146,11 +156,12 @@ class BioHubAPI {
         const arr: UploadRecord[] = JSON.parse(uploadsJson);
         arr.forEach((r) => this.uploadRecords.set(r.sessionId, r));
       }
+      await authStore.init();
     } catch {}
     this.initialized = true;
   }
 
-  /* ─── Config Management ─── */
+  /* ─── Config ─── */
 
   getConfig(): ServerConfig {
     return { ...this.config };
@@ -165,7 +176,17 @@ class BioHubAPI {
     return this.config.baseUrl.trim().length > 0;
   }
 
-  /* ─── Upload Records ─── */
+  /* ─── Auth passthrough ─── */
+
+  getUser(): AuthUser | null {
+    return authStore.getUser();
+  }
+
+  isAuthenticated(): boolean {
+    return authStore.isAuthenticated();
+  }
+
+  /* ─── Upload records ─── */
 
   getUploadRecord(sessionId: number): UploadRecord | undefined {
     return this.uploadRecords.get(sessionId);
@@ -180,7 +201,7 @@ class BioHubAPI {
     await AsyncStorage.setItem(UPLOADS_KEY, JSON.stringify(arr));
   }
 
-  /* ─── HTTP Helpers ─── */
+  /* ─── HTTP core ─── */
 
   private buildUrl(path: string): string {
     const base = this.config.baseUrl.replace(/\/+$/, '');
@@ -191,7 +212,8 @@ class BioHubAPI {
     method: string,
     path: string,
     body?: any,
-  ): Promise<{ ok: boolean; data?: T; error?: string; status?: number }> {
+    opts: { auth?: boolean } = {},
+  ): Promise<Req<T>> {
     if (!this.isConfigured()) {
       return { ok: false, error: '未配置服务器地址' };
     }
@@ -201,8 +223,10 @@ class BioHubAPI {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
-    if (this.config.apiKey) {
-      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+
+    if (opts.auth !== false) {
+      const token = authStore.getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
     }
 
     const controller = new AbortController();
@@ -217,13 +241,20 @@ class BioHubAPI {
       });
       clearTimeout(timer);
 
+      if (res.status === 401 && opts.auth !== false) {
+        // Server rejected our token — force logout so the UI shows the login screen.
+        await authStore.clear();
+      }
+
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        return {
-          ok: false,
-          error: `服务器错误 (${res.status}): ${text || res.statusText}`,
-          status: res.status,
-        };
+        let msg = text || res.statusText;
+        // FastAPI returns {"detail": "..."} on errors — surface it directly.
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed?.detail) msg = String(parsed.detail);
+        } catch {}
+        return { ok: false, error: msg, status: res.status };
       }
 
       const data = await res.json();
@@ -233,11 +264,11 @@ class BioHubAPI {
       if (err.name === 'AbortError') {
         return { ok: false, error: '请求超时' };
       }
-      return { ok: false, error: err.message || '网络错误' };
+      return { ok: false, error: err?.message || '网络错误' };
     }
   }
 
-  /* ─── Server Status ─── */
+  /* ─── Server status ─── */
 
   async checkServer(): Promise<ServerStatus> {
     if (!this.isConfigured()) {
@@ -248,6 +279,8 @@ class BioHubAPI {
     const result = await this.request<{ version?: string; status?: string }>(
       'GET',
       '/api/health',
+      undefined,
+      { auth: false },
     );
     const latencyMs = Date.now() - start;
 
@@ -262,9 +295,98 @@ class BioHubAPI {
     return { online: false, message: result.error || '无法连接到服务器' };
   }
 
-  /* ─── Upload Session ─── */
+  /* ─── Auth ─── */
+
+  private async persistAuthResponse(data: any): Promise<AuthSession> {
+    const session: AuthSession = {
+      token: data.accessToken,
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        displayName: data.user.displayName ?? null,
+        isAdmin: !!data.user.isAdmin,
+        createdAt: data.user.createdAt,
+      },
+      expiresAt: data.expiresAt,
+    };
+    await authStore.setSession(session);
+    return session;
+  }
+
+  async register(
+    email: string,
+    password: string,
+    displayName?: string,
+  ): Promise<{ ok: boolean; session?: AuthSession; error?: string }> {
+    const result = await this.request<any>(
+      'POST',
+      '/api/auth/register',
+      { email, password, displayName },
+      { auth: false },
+    );
+    if (result.ok && result.data) {
+      const session = await this.persistAuthResponse(result.data);
+      return { ok: true, session };
+    }
+    return { ok: false, error: result.error };
+  }
+
+  async login(
+    email: string,
+    password: string,
+  ): Promise<{ ok: boolean; session?: AuthSession; error?: string }> {
+    const result = await this.request<any>(
+      'POST',
+      '/api/auth/login',
+      { email, password },
+      { auth: false },
+    );
+    if (result.ok && result.data) {
+      const session = await this.persistAuthResponse(result.data);
+      return { ok: true, session };
+    }
+    return { ok: false, error: result.error };
+  }
+
+  async logout(): Promise<void> {
+    await authStore.clear();
+  }
+
+  async refreshMe(): Promise<{ ok: boolean; user?: AuthUser; error?: string }> {
+    const result = await this.request<any>('GET', '/api/auth/me');
+    if (result.ok && result.data) {
+      const user: AuthUser = {
+        id: result.data.id,
+        email: result.data.email,
+        displayName: result.data.displayName ?? null,
+        isAdmin: !!result.data.isAdmin,
+        createdAt: result.data.createdAt,
+      };
+      await authStore.updateUser(user);
+      return { ok: true, user };
+    }
+    return { ok: false, error: result.error };
+  }
+
+  async changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.request<any>('POST', '/api/auth/change-password', {
+      currentPassword,
+      newPassword,
+    });
+    if (result.ok) return { ok: true };
+    return { ok: false, error: result.error };
+  }
+
+  /* ─── Upload session ─── */
 
   async uploadSession(session: Session): Promise<UploadResult> {
+    if (!this.isAuthenticated()) {
+      return { success: false, message: '请先登录后再上传' };
+    }
+
     const record: UploadRecord = {
       sessionId: session.id,
       state: 'uploading',

@@ -39,7 +39,6 @@ export default function CloudScreen() {
   const [loading, setLoading] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
   const [selectedReport, setSelectedReport] = useState<AnalysisReport | null>(null);
 
   const loadData = useCallback(async () => {
@@ -48,7 +47,6 @@ export default function CloudScreen() {
       await bioHubAPI.init();
       const config = bioHubAPI.getConfig();
       setServerUrl(config.baseUrl);
-      setApiKey(config.apiKey);
 
       const allSessions = await getAllSessions();
       setSessions(allSessions);
@@ -78,9 +76,9 @@ export default function CloudScreen() {
   };
 
   const saveConfig = async () => {
-    await bioHubAPI.setConfig({ baseUrl: serverUrl.trim(), apiKey: apiKey.trim() });
+    await bioHubAPI.setConfig({ baseUrl: serverUrl.trim() });
     setShowConfig(false);
-    Alert.alert('已保存', '服务器配置已更新');
+    Alert.alert('已保存', '服务器地址已更新');
     checkConnection();
   };
 
@@ -398,23 +396,16 @@ export default function CloudScreen() {
             style={styles.input}
             value={serverUrl}
             onChangeText={setServerUrl}
-            placeholder="https://api.example.com"
+            placeholder="http://156.226.176.22"
             placeholderTextColor="#4B5563"
             autoCapitalize="none"
             autoCorrect={false}
+            keyboardType="url"
           />
 
-          <Text style={styles.inputLabel}>API 密钥 (可选)</Text>
-          <TextInput
-            style={styles.input}
-            value={apiKey}
-            onChangeText={setApiKey}
-            placeholder="your-api-key"
-            placeholderTextColor="#4B5563"
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-          />
+          <Text style={styles.hintText}>
+            登录后使用 JWT 令牌自动认证，无需 API 密钥。
+          </Text>
 
           {serverStatus && (
             <View style={[styles.statusBanner, {
@@ -697,6 +688,7 @@ const styles = StyleSheet.create({
   },
   configTitle: { fontSize: 20, fontWeight: '800', color: '#E0E7FF', marginBottom: 20 },
   inputLabel: { fontSize: 13, color: '#9CA3AF', marginBottom: 6, fontWeight: '600' },
+  hintText: { fontSize: 12, color: '#6B7280', marginTop: 6, marginBottom: 4 },
   input: {
     backgroundColor: '#0F172A',
     borderRadius: 8,

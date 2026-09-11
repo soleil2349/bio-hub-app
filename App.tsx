@@ -1,11 +1,12 @@
 /**
  * BIO HUB App — main entry component.
  *
- * Navigation structure:
- *   Not connected → Bottom tabs: 扫描 | 云服务 | 历史 | 设置
- *   Connected     → DeviceScreen (with its own internal tabs)
+ * Flow:
+ *   Not authenticated → AuthScreen (login / register)
+ *   Not connected     → Bottom tabs: 扫描 | 云服务 | 历史 | 设置
+ *   Connected         → DeviceScreen (with its own internal tabs)
  *
- * Initializes SQLite database and API client on startup.
+ * Initializes SQLite database, API client and auth store on startup.
  */
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
@@ -15,9 +16,11 @@ import DeviceScreen from './src/screens/DeviceScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import CloudScreen from './src/screens/CloudScreen';
 import SettingsScreen, { loadSettings, AppSettings } from './src/screens/SettingsScreen';
+import AuthScreen from './src/screens/AuthScreen';
 import TabBar from './src/components/TabBar';
 import { initDatabase } from './src/storage';
 import { bioHubAPI } from './src/api';
+import { authStore, AuthSession } from './src/auth';
 
 type MainTab = 'scan' | 'cloud' | 'history' | 'settings';
 
@@ -26,6 +29,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<MainTab>('scan');
   const [dbReady, setDbReady] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [session, setSession] = useState<AuthSession | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -34,22 +38,38 @@ export default function App() {
       bioHubAPI.init(),
     ]).then(([_, s]) => {
       setSettings(s);
+      setSession(authStore.getSession());
       setDbReady(true);
     }).catch((err) => {
       console.error('Init error:', err);
       setDbReady(true);
     });
+
+    const unsubscribe = authStore.subscribe((s) => {
+      setSession(s);
+      // If auth got cleared (logout / 401) drop the current device connection
+      // so the app returns cleanly to the login screen.
+      if (!s) {
+        setConnectedDevice(null);
+        setActiveTab('scan');
+      }
+    });
+    return unsubscribe;
   }, []);
 
   if (!dbReady) {
     return (
       <View style={styles.splash}>
         <Text style={styles.splashTitle}>BIO HUB</Text>
-        <Text style={styles.splashVersion}>v1.2.0</Text>
+        <Text style={styles.splashVersion}>v1.3.0</Text>
         <ActivityIndicator color="#4A90D9" size="large" style={{ marginTop: 24 }} />
         <Text style={styles.splashText}>初始化中...</Text>
       </View>
     );
+  }
+
+  if (!session) {
+    return <AuthScreen onAuthed={() => setSession(authStore.getSession())} />;
   }
 
   if (connectedDevice) {

@@ -1,5 +1,6 @@
 /**
- * Settings screen — app configuration, data management, and about info.
+ * Settings screen — app configuration, account management,
+ * data management and about info.
  */
 import React, { useState, useEffect } from 'react';
 import {
@@ -11,10 +12,14 @@ import {
   ScrollView,
   Switch,
   Alert,
+  Modal,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { clearAllData } from '../storage';
 import { bioHubAPI } from '../api';
+import { authStore, AuthUser } from '../auth';
 
 const SETTINGS_KEY = '@biohub_settings';
 
@@ -23,8 +28,6 @@ export interface AppSettings {
   showDebugOnConnect: boolean;
   preferSLE: boolean;
   scanDuration: number;
-  serverUrl: string;
-  apiKey: string;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -32,8 +35,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   showDebugOnConnect: false,
   preferSLE: false,
   scanDuration: 10,
-  serverUrl: '',
-  apiKey: '',
 };
 
 async function loadSettings(): Promise<AppSettings> {
@@ -52,10 +53,51 @@ export { loadSettings };
 
 export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [user, setUser] = useState<AuthUser | null>(authStore.getUser());
+  const [showChangePwd, setShowChangePwd] = useState(false);
+  const [curPwd, setCurPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [newPwd2, setNewPwd2] = useState('');
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [pwdSubmitting, setPwdSubmitting] = useState(false);
 
   useEffect(() => {
     loadSettings().then(setSettings);
+    const unsub = authStore.subscribe((s) => setUser(s?.user ?? null));
+    return unsub;
   }, []);
+
+  const handleLogout = () => {
+    Alert.alert('退出登录', '确定要退出当前账户吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '退出',
+        style: 'destructive',
+        onPress: async () => {
+          await bioHubAPI.logout();
+        },
+      },
+    ]);
+  };
+
+  const submitChangePwd = async () => {
+    setPwdError(null);
+    if (!curPwd) return setPwdError('请输入当前密码');
+    if (newPwd.length < 6) return setPwdError('新密码至少 6 位');
+    if (newPwd !== newPwd2) return setPwdError('两次输入的新密码不一致');
+    setPwdSubmitting(true);
+    const result = await bioHubAPI.changePassword(curPwd, newPwd);
+    setPwdSubmitting(false);
+    if (result.ok) {
+      setShowChangePwd(false);
+      setCurPwd('');
+      setNewPwd('');
+      setNewPwd2('');
+      Alert.alert('已更新', '密码修改成功');
+    } else {
+      setPwdError(result.error || '修改失败');
+    }
+  };
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const next = { ...settings, [key]: value };
@@ -98,6 +140,40 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+        {/* Account */}
+        <Text style={styles.sectionTitle}>账户</Text>
+        <View style={styles.card}>
+          <View style={styles.settingRow}>
+            <View style={styles.settingInfo}>
+              <Text style={styles.settingLabel}>
+                {user?.displayName || user?.email || '未登录'}
+              </Text>
+              {user?.displayName && (
+                <Text style={styles.settingDesc}>{user.email}</Text>
+              )}
+              {user?.isAdmin && (
+                <Text style={[styles.settingDesc, { color: '#A78BFA' }]}>管理员</Text>
+              )}
+            </View>
+          </View>
+          <View style={styles.divider} />
+          <TouchableOpacity
+            style={styles.settingRow}
+            onPress={() => setShowChangePwd(true)}
+          >
+            <View style={styles.settingInfo}>
+              <Text style={styles.settingLabel}>修改密码</Text>
+              <Text style={styles.settingDesc}>更改登录密码</Text>
+            </View>
+            <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <TouchableOpacity style={styles.dangerRow} onPress={handleLogout}>
+            <Text style={styles.dangerLabel}>退出登录</Text>
+            <Text style={styles.dangerDesc}>退出后需要重新登录才能查看数据</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Recording Settings */}
         <Text style={styles.sectionTitle}>数据记录</Text>
         <View style={styles.card}>
@@ -185,28 +261,22 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Server Settings */}
+        {/* Server info (read-only summary) */}
         <Text style={styles.sectionTitle}>云服务</Text>
         <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.settingRow}
-            onPress={() => {
-              Alert.alert(
-                '服务器配置',
-                '请在「云服务」页面中配置服务器地址和 API 密钥。\n\n切换到「云服务」标签页即可进行配置。',
-              );
-            }}
-          >
+          <View style={styles.settingRow}>
             <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>服务器配置</Text>
+              <Text style={styles.settingLabel}>服务器地址</Text>
               <Text style={styles.settingDesc}>
                 {bioHubAPI.isConfigured()
-                  ? `已配置: ${bioHubAPI.getConfig().baseUrl}`
-                  : '未配置 - 前往云服务页面设置'}
+                  ? bioHubAPI.getConfig().baseUrl
+                  : '未配置'}
+              </Text>
+              <Text style={[styles.settingDesc, { marginTop: 2 }]}>
+                在「云服务」页面可以修改
               </Text>
             </View>
-            <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
-          </TouchableOpacity>
+          </View>
         </View>
 
         {/* Data Management */}
@@ -232,7 +302,7 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <View style={styles.aboutRow}>
             <Text style={styles.aboutLabel}>版本</Text>
-            <Text style={styles.aboutValue}>1.2.0</Text>
+            <Text style={styles.aboutValue}>1.3.0</Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.aboutRow}>
@@ -256,6 +326,74 @@ export default function SettingsScreen() {
           蓝牙/星闪 生物传感器数据采集与分析
         </Text>
       </ScrollView>
+
+      {/* Change password modal */}
+      <Modal visible={showChangePwd} animationType="slide" transparent>
+        <View style={styles.pwdOverlay}>
+          <View style={styles.pwdPanel}>
+            <Text style={styles.pwdTitle}>修改密码</Text>
+
+            <Text style={styles.pwdLabel}>当前密码</Text>
+            <TextInput
+              style={styles.pwdInput}
+              value={curPwd}
+              onChangeText={setCurPwd}
+              placeholder="输入当前密码"
+              placeholderTextColor="#4B5563"
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.pwdLabel}>新密码</Text>
+            <TextInput
+              style={styles.pwdInput}
+              value={newPwd}
+              onChangeText={setNewPwd}
+              placeholder="至少 6 位"
+              placeholderTextColor="#4B5563"
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.pwdLabel}>确认新密码</Text>
+            <TextInput
+              style={styles.pwdInput}
+              value={newPwd2}
+              onChangeText={setNewPwd2}
+              placeholder="再次输入新密码"
+              placeholderTextColor="#4B5563"
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            {pwdError && <Text style={styles.pwdError}>{pwdError}</Text>}
+
+            <View style={styles.pwdActions}>
+              <TouchableOpacity
+                style={[styles.pwdBtn, styles.pwdBtnSecondary]}
+                onPress={() => {
+                  setShowChangePwd(false);
+                  setPwdError(null);
+                }}
+                disabled={pwdSubmitting}
+              >
+                <Text style={styles.pwdBtnSecondaryText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pwdBtn, styles.pwdBtnPrimary]}
+                onPress={submitChangePwd}
+                disabled={pwdSubmitting}
+              >
+                {pwdSubmitting ? (
+                  <ActivityIndicator color="#E0E7FF" />
+                ) : (
+                  <Text style={styles.pwdBtnPrimaryText}>保存</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -330,4 +468,60 @@ const styles = StyleSheet.create({
     marginTop: 32,
     lineHeight: 20,
   },
+  pwdOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  pwdPanel: {
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    borderColor: '#1F2937',
+    borderWidth: 1,
+    padding: 20,
+  },
+  pwdTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#E0E7FF',
+    marginBottom: 12,
+  },
+  pwdLabel: {
+    color: '#9CA3AF',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 10,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  pwdInput: {
+    backgroundColor: '#1F2937',
+    borderRadius: 8,
+    borderColor: '#374151',
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#E5E7EB',
+    fontSize: 14,
+  },
+  pwdError: { color: '#F87171', marginTop: 12, fontSize: 13, textAlign: 'center' },
+  pwdActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16,
+    justifyContent: 'flex-end',
+  },
+  pwdBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 8,
+    minWidth: 90,
+    alignItems: 'center',
+  },
+  pwdBtnSecondary: { backgroundColor: '#1F2937' },
+  pwdBtnSecondaryText: { color: '#93C5FD', fontWeight: '600' },
+  pwdBtnPrimary: { backgroundColor: '#1D4ED8' },
+  pwdBtnPrimaryText: { color: '#E0E7FF', fontWeight: '700' },
 });
