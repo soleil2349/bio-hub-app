@@ -11,7 +11,10 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "需要蓝牙权限来连接 BIO_HUB 传感器",
-        "NSBluetoothPeripheralUsageDescription": "需要蓝牙权限来连接 BIO_HUB 传感器"
+        "NSBluetoothPeripheralUsageDescription": "需要蓝牙权限来连接 BIO_HUB 传感器",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
@@ -33,7 +36,8 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 24
+            "minSdkVersion": 24,
+            "usesCleartextTraffic": true
           }
         }
       ],
