@@ -20,7 +20,15 @@ import {
 } from 'react-native';
 import { Device } from 'react-native-ble-plx';
 import { bioBleMgr, DiscoveryResult } from '../ble-manager';
-import { BioPkt, ConnectionType } from '../protocol';
+import {
+  BioPkt,
+  ConnectionType,
+  LED_MODE_AUTO,
+  LED_MODE_ON,
+  LED_MODE_OFF,
+  LED_MODE_BLINK,
+  LED_MODE_LABELS,
+} from '../protocol';
 import { LiveAnalyzer, LiveStats, formatDuration } from '../analysis';
 import { createSession, endSession, queueMeasurement, flushPending, isReady } from '../storage';
 import Waveform from '../components/Waveform';
@@ -162,6 +170,8 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
   const [data, setData] = useState<BioPkt | null>(null);
   const [display, setDisplay] = useState<DisplayValues>(EMPTY_DISPLAY);
   const [paused, setPaused] = useState(false);
+  /** V3：板载 LED 模式（LED_MODE_AUTO/ON/OFF/BLINK）*/
+  const [ledMode, setLedMode] = useState<number>(LED_MODE_AUTO);
   const [pktCount, setPktCount] = useState(0);
   const [activeTab, setActiveTab] = useState<DeviceTab>('live');
   const [recording, setRecording] = useState(false);
@@ -276,6 +286,19 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
     onDisconnect();
   };
 
+  /* V3：板载 LED 模式控制（自动 → 常亮 → 常灭 → 快闪 循环切换）*/
+  const handleCycleLed = async () => {
+    const order = [LED_MODE_AUTO, LED_MODE_ON, LED_MODE_OFF, LED_MODE_BLINK];
+    const idx = order.indexOf(ledMode);
+    const next = order[(idx + 1) % order.length];
+    try {
+      await bioBleMgr.sendSetLed(next);
+      setLedMode(next);
+    } catch (err: any) {
+      Alert.alert('发送失败', err.message);
+    }
+  };
+
   const toggleRecording = () => {
     if (recording) {
       stopRecording();
@@ -297,6 +320,17 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
         <StatusBadge ok={!!data?.flags.finger} label="手指检测" />
         <StatusBadge ok={!!data?.flags.pttValid} label="PTT有效" />
       </View>
+
+      {/* V3：设备侧链路与指示灯状态（来自 bio_pkt_t.status 第 21 字节）
+          旧固件（20 字节包）无此字段 → devStatus 为 undefined，自动隐藏 */}
+      {data?.devStatus && (
+        <View style={styles.statusRow}>
+          <StatusBadge ok={data.devStatus.sleConn} label="星闪SLE" />
+          <StatusBadge ok={data.devStatus.bleConn} label="蓝牙BLE" />
+          <StatusBadge ok={data.devStatus.ledOn} label="板载LED" />
+          <StatusBadge ok={!data.devStatus.ledManual} label="LED自动" />
+        </View>
+      )}
 
       <View style={styles.heroRow}>
         <DataCard
@@ -345,6 +379,16 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
         >
           <Text style={styles.controlBtnText}>
             {paused ? '\u25B6 恢复采集' : '\u23F8 暂停采集'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* V3：板载 LED 模式切换（自动/常亮/常灭/快闪）*/}
+        <TouchableOpacity
+          style={[styles.controlBtn, ledMode !== LED_MODE_AUTO && styles.controlBtnActive]}
+          onPress={handleCycleLed}
+        >
+          <Text style={styles.controlBtnText}>
+            {'\uD83D\uDCA1 '}指示灯: {LED_MODE_LABELS[ledMode] ?? '自动'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -675,15 +719,21 @@ const styles = StyleSheet.create({
   extraLabel: { fontSize: 12, color: '#9CA3AF', marginBottom: 4 },
   extraValue: { fontSize: 18, fontWeight: '700', color: '#818CF8', fontFamily: 'monospace' },
   extraUnit: { fontSize: 12, color: '#6B7280' },
-  controlRow: { marginTop: 16, alignItems: 'center' },
+  controlRow: {
+    marginTop: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+  },
   controlBtn: {
     backgroundColor: '#1E3A5F',
-    paddingHorizontal: 32,
+    paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#2563EB',
-    minWidth: 200,
+    minWidth: 150,
     alignItems: 'center',
   },
   controlBtnActive: { backgroundColor: '#14532D', borderColor: '#22C55E' },

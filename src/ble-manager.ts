@@ -22,6 +22,8 @@ import {
   detectConnectionType,
   CMD_HEARTBEAT,
   CMD_TOGGLE,
+  CMD_SET_LED,
+  CMD_PING,
 } from './protocol';
 
 /** Standard BLE UUIDs that should be skipped during auto-discovery */
@@ -338,12 +340,14 @@ class BioBleMgr {
     return () => sub.remove();
   }
 
-  private async writeCmd(cmd: number): Promise<void> {
+  private async writeCmd(cmd: number, seqOverride?: number): Promise<void> {
     if (!this.device || !this.serviceUUID || !this.charUUID) {
       throw new Error('未连接或未发现特征值');
     }
     const uptimeS = Math.floor((Date.now() - this.startTime) / 1000);
-    const pkt = buildCtrlPkt(cmd, this.ctrlSeq++, uptimeS);
+    // seqOverride 用于 CMD_SET_LED：LED 模式值借 seq 字段传给固件
+    const seq = seqOverride !== undefined ? (seqOverride & 0xff) : this.ctrlSeq++;
+    const pkt = buildCtrlPkt(cmd, seq, uptimeS);
     const b64 = Buffer.from(pkt).toString('base64');
 
     await this.device.writeCharacteristicWithoutResponseForService(
@@ -359,6 +363,16 @@ class BioBleMgr {
 
   async sendToggle(): Promise<void> {
     await this.writeCmd(CMD_TOGGLE);
+  }
+
+  /** V3 固件：设置板载 LED 模式（LED_MODE_AUTO / ON / OFF / BLINK）*/
+  async sendSetLed(mode: number): Promise<void> {
+    await this.writeCmd(CMD_SET_LED, mode);
+  }
+
+  /** V3 固件：回声测试，设备收到后在串口打印 [SRV] PING ... */
+  async sendPing(): Promise<void> {
+    await this.writeCmd(CMD_PING);
   }
 
   startHeartbeatLoop(): void {

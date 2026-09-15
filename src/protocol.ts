@@ -48,6 +48,46 @@ export const KNOWN_CHAR_UUIDS = [...BLE_CHAR_UUIDS, ...SLE_CHAR_UUIDS];
 
 export const CMD_HEARTBEAT = 0;
 export const CMD_TOGGLE = 1;
+/** V3 新增：设置板载 LED 模式，模式值放在 seq 字段 */
+export const CMD_SET_LED = 2;
+/** V3 新增：回声测试（设备收到后打日志，用于确认链路连通） */
+export const CMD_PING = 3;
+
+/* ─── LED Modes (CMD_SET_LED 的 seq 值) ─── */
+
+export const LED_MODE_AUTO = 0;   // 固件按连接状态自动显示
+export const LED_MODE_ON = 1;     // 常亮
+export const LED_MODE_OFF = 2;    // 常灭
+export const LED_MODE_BLINK = 3;  // 快闪（在设备堆里识别本机）
+
+export const LED_MODE_LABELS: Record<number, string> = {
+  [LED_MODE_AUTO]: '自动',
+  [LED_MODE_ON]: '常亮',
+  [LED_MODE_OFF]: '常灭',
+  [LED_MODE_BLINK]: '快闪',
+};
+
+/* ─── Device Status Byte（V3 固件 bio_pkt_t 第 21 字节）─── */
+
+export const BIO_ST_SLE_CONN = 0x01;   // 星闪 SLE 客户端已连接
+export const BIO_ST_BLE_CONN = 0x02;   // BLE 客户端已连接
+export const BIO_ST_PAUSED = 0x04;     // 数据推送已暂停
+export const BIO_ST_MAX_OK = 0x08;     // MAX30102 正常
+export const BIO_ST_BMD_OK = 0x10;     // BMD101 正常
+export const BIO_ST_FINGER = 0x20;     // 检测到手指
+export const BIO_ST_LED_ON = 0x40;     // 板载 LED 当前点亮
+export const BIO_ST_LED_MANUAL = 0x80; // LED 处于 App 手动模式
+
+export interface DeviceStatus {
+  sleConn: boolean;
+  bleConn: boolean;
+  paused: boolean;
+  maxOk: boolean;
+  bmdOk: boolean;
+  finger: boolean;
+  ledOn: boolean;
+  ledManual: boolean;
+}
 
 /* ─── Sensor Data Packet ─── */
 
@@ -70,6 +110,10 @@ export interface BioPkt {
   ecgSig: number;
   ecgRaw: number;
   rrMs: number;
+  /** V3 固件（21 字节包）新增：设备状态；旧固件 / 20 字节包为 undefined */
+  devStatus?: DeviceStatus;
+  /** 原始 status 字节（无则 undefined） */
+  statusByte?: number;
 }
 
 /**
@@ -111,6 +155,24 @@ export function parseBioPkt(data: Uint8Array): BioPkt | null {
   const ecgRaw = view.getInt16(16, true);
   const rrMs = view.getUint16(18, true);
 
+  // V3 固件：第 21 字节（下标 20）为设备状态位图；
+  // 旧固件只发 20 字节 → devStatus 为 undefined，UI 需做兼容判断。
+  let statusByte: number | undefined;
+  let devStatus: DeviceStatus | undefined;
+  if (data.length >= 21) {
+    statusByte = data[20];
+    devStatus = {
+      sleConn: !!(statusByte & BIO_ST_SLE_CONN),
+      bleConn: !!(statusByte & BIO_ST_BLE_CONN),
+      paused: !!(statusByte & BIO_ST_PAUSED),
+      maxOk: !!(statusByte & BIO_ST_MAX_OK),
+      bmdOk: !!(statusByte & BIO_ST_BMD_OK),
+      finger: !!(statusByte & BIO_ST_FINGER),
+      ledOn: !!(statusByte & BIO_ST_LED_ON),
+      ledManual: !!(statusByte & BIO_ST_LED_MANUAL),
+    };
+  }
+
   return {
     hr,
     spo2,
@@ -130,6 +192,8 @@ export function parseBioPkt(data: Uint8Array): BioPkt | null {
     ecgSig,
     ecgRaw,
     rrMs,
+    devStatus,
+    statusByte,
   };
 }
 
