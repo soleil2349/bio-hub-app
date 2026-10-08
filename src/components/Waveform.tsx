@@ -1,36 +1,51 @@
 /**
- * Real-time waveform display component using react-native-svg.
- * Renders a scrolling polyline with grid background.
+ * Real-time waveform plot (react-native-svg).
+ *
+ * Layout notes
+ * ------------
+ *  - `width` is supplied by the caller from a measured container, so the plot
+ *    can never be wider than its card.
+ *  - The label row keeps the title shrinkable and the unit fixed, so a long
+ *    localised label cannot push the unit off the edge.
+ *  - The waiting state is a centred hint rather than an absolutely positioned
+ *    overlay with a low-contrast string (#4B5563 at 1.9:1 was unreadable).
  */
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import Svg, { Polyline, Line, Rect } from 'react-native-svg';
+import { StyleSheet, Text, View } from 'react-native';
+import Svg, { Line, Polyline, Rect } from 'react-native-svg';
+import { color, radius, space, type } from '../theme';
 
-interface WaveformProps {
+export interface WaveformProps {
   data: number[];
   width: number;
   height: number;
+  /** Plot stroke colour, normally a vital hue. */
   color: string;
   label?: string;
   unit?: string;
   showGrid?: boolean;
+  /** Centre the trace on zero; use for raw bipolar ECG. */
   signed?: boolean;
 }
+
+const PAD = 4;
+const GRID_DIVISIONS = 4;
 
 export default function Waveform({
   data,
   width,
   height,
-  color,
+  color: stroke,
   label,
   unit,
   showGrid = true,
   signed = false,
 }: WaveformProps) {
   const points = useMemo(() => {
-    if (data.length < 2) return '';
+    if (data.length < 2 || width <= 0) return '';
 
-    let minVal: number, maxVal: number;
+    let minVal: number;
+    let maxVal: number;
     if (signed) {
       const absMax = Math.max(...data.map(Math.abs), 1);
       minVal = -absMax;
@@ -38,19 +53,16 @@ export default function Waveform({
     } else {
       minVal = Math.min(...data);
       maxVal = Math.max(...data);
-      if (maxVal === minVal) {
-        maxVal = minVal + 1;
-      }
+      if (maxVal === minVal) maxVal = minVal + 1;
     }
 
-    const padding = 4;
     const range = maxVal - minVal;
     const pointSpacing = width / Math.max(data.length - 1, 1);
 
     return data
       .map((val, i) => {
         const x = i * pointSpacing;
-        const y = padding + ((maxVal - val) / range) * (height - padding * 2);
+        const y = PAD + ((maxVal - val) / range) * (height - PAD * 2);
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(' ');
@@ -58,89 +70,82 @@ export default function Waveform({
 
   const gridLines = useMemo(() => {
     if (!showGrid) return [];
-    const lines: { y: number }[] = [];
-    const count = 4;
-    for (let i = 0; i <= count; i++) {
-      lines.push({ y: (height / count) * i });
-    }
-    return lines;
+    return Array.from({ length: GRID_DIVISIONS + 1 }, (_, i) => (height / GRID_DIVISIONS) * i);
   }, [height, showGrid]);
 
+  const isEmpty = data.length < 2;
+
   return (
-    <View style={[styles.container, { width, height: height + (label ? 28 : 0) }]}>
-      {label && (
+    <View style={styles.container}>
+      {label ? (
         <View style={styles.labelRow}>
-          <Text style={styles.label}>{label}</Text>
-          {unit && <Text style={styles.unit}>{unit}</Text>}
+          <Text style={[type.label, styles.label]} numberOfLines={1}>
+            {label}
+          </Text>
+          {unit ? (
+            <Text style={[type.caption, styles.unit]} numberOfLines={1}>
+              {unit}
+            </Text>
+          ) : null}
         </View>
-      )}
-      <View style={[styles.svgWrapper, { width, height }]}>
+      ) : null}
+
+      <View style={[styles.plot, { width, height }]}>
         <Svg width={width} height={height}>
-          <Rect x={0} y={0} width={width} height={height} fill="#0F172A" rx={4} />
-          {gridLines.map((line, i) => (
-            <Line
-              key={i}
-              x1={0}
-              y1={line.y}
-              x2={width}
-              y2={line.y}
-              stroke="#1E293B"
-              strokeWidth={0.5}
-            />
-          ))}
-          {signed && (
+          <Rect x={0} y={0} width={width} height={height} fill={color.sunken} rx={8} />
+
+          {showGrid
+            ? gridLines.map((y, i) => (
+                <Line key={i} x1={0} y1={y} x2={width} y2={y} stroke={color.plotGrid} strokeWidth={1} />
+              ))
+            : null}
+
+          {signed ? (
             <Line
               x1={0}
               y1={height / 2}
               x2={width}
               y2={height / 2}
-              stroke="#334155"
+              stroke={color.plotAxis}
               strokeWidth={1}
               strokeDasharray="4,4"
             />
-          )}
-          {points.length > 0 && (
+          ) : null}
+
+          {points.length > 0 ? (
             <Polyline
               points={points}
               fill="none"
-              stroke={color}
+              stroke={stroke}
               strokeWidth={1.5}
               strokeLinejoin="round"
+              strokeLinecap="round"
             />
-          )}
+          ) : null}
         </Svg>
-        {data.length < 2 && (
-          <View style={styles.emptyOverlay}>
-            <Text style={styles.emptyText}>等待数据...</Text>
+
+        {isEmpty ? (
+          <View style={styles.emptyOverlay} pointerEvents="none">
+            <Text style={[type.caption, styles.emptyText]}>等待数据</Text>
           </View>
-        )}
+        ) : null}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {},
+  container: { width: '100%' },
   labelRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
-    paddingHorizontal: 2,
+    justifyContent: 'space-between',
+    gap: space.sm,
+    marginBottom: space.xs + 2,
   },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#9CA3AF',
-  },
-  unit: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-  svgWrapper: {
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
+  label: { color: color.textSecondary, flexShrink: 1, minWidth: 0 },
+  unit: { color: color.textMuted, flexShrink: 0 },
+  plot: { borderRadius: radius.sm, overflow: 'hidden' },
   emptyOverlay: {
     position: 'absolute',
     top: 0,
@@ -150,8 +155,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  emptyText: {
-    color: '#4B5563',
-    fontSize: 13,
-  },
+  emptyText: { color: color.textMuted },
 });

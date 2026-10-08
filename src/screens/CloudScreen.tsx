@@ -4,35 +4,73 @@
  * Works in two modes:
  *   1. Online: uploads data to configured server, fetches AI analysis reports
  *   2. Offline: generates local analysis reports from stored data
+ *
+ * Layout notes
+ * ------------
+ *  - Session rows and report details put long text next to fixed badges without
+ *    `flexShrink`, so a long device name or a long status message pushed the
+ *    badge outside the card. Both sides now negotiate width explicitly.
+ *  - The report modal was `<Modal visible>` with no `onRequestClose`, so the
+ *    Android hardware back button did nothing while it was open. It now closes.
+ *  - The server-config sheet sits on a `KeyboardAvoidingView`: with the URL
+ *    keyboard open the save button used to be covered by it.
+ *  - Full-screen spinners became skeleton rows shaped like the content, so the
+ *    list no longer jumps when data arrives.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
   ActivityIndicator,
-  TextInput,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
-import {
-  bioHubAPI,
-  ServerStatus,
-  AnalysisReport,
-  UploadRecord,
-} from '../api';
+import { bioHubAPI, ServerStatus, AnalysisReport, UploadRecord } from '../api';
 import { Session, getAllSessions } from '../storage';
 import { formatTime, formatDuration } from '../analysis';
 import { authStore, AuthUser } from '../auth';
+import Icon from '../components/Icon';
+import {
+  Button,
+  Card,
+  DetailRow,
+  EmptyState,
+  Pill,
+  Screen,
+  ScreenHeader,
+  SectionTitle,
+  SegmentedControl,
+  SkeletonRow,
+  StatusDot,
+} from '../components/ui';
+import { color, radius, space, tabularNums, type, vital } from '../theme';
 
 type ViewMode = 'sessions' | 'reports';
 
 interface Props {
   /** 未登录时点击提示条回调，由 App 切换到登录页 */
   onRequireLogin?: () => void;
+}
+
+const VIEW_OPTIONS = [
+  { value: 'sessions' as const, label: '会话数据' },
+  { value: 'reports' as const, label: '分析报告' },
+];
+
+/** Health-score hue, shared by the list badge and the report header. */
+function scoreHue(score: number): string {
+  return score >= 80 ? color.success : score >= 60 ? color.warning : color.danger;
+}
+
+function statusHue(status: string): string {
+  return status === 'normal' ? color.success : status === 'warning' ? color.warning : color.danger;
 }
 
 export default function CloudScreen({ onRequireLogin }: Props) {
@@ -52,17 +90,12 @@ export default function CloudScreen({ onRequireLogin }: Props) {
     setLoading(true);
     try {
       await bioHubAPI.init();
-      const config = bioHubAPI.getConfig();
-      setServerUrl(config.baseUrl);
-
-      const allSessions = await getAllSessions();
-      setSessions(allSessions);
+      setServerUrl(bioHubAPI.getConfig().baseUrl);
+      setSessions(await getAllSessions());
 
       if (bioHubAPI.isConfigured()) {
         const result = await bioHubAPI.getReports();
-        if (result.ok && result.reports) {
-          setReports(result.reports);
-        }
+        if (result.ok && result.reports) setReports(result.reports);
       }
     } catch (err) {
       console.warn('Load error:', err);
@@ -82,9 +115,11 @@ export default function CloudScreen({ onRequireLogin }: Props) {
 
   const checkConnection = async () => {
     setChecking(true);
-    const status = await bioHubAPI.checkServer();
-    setServerStatus(status);
-    setChecking(false);
+    try {
+      setServerStatus(await bioHubAPI.checkServer());
+    } finally {
+      setChecking(false);
+    }
   };
 
   const saveConfig = async () => {
@@ -96,7 +131,7 @@ export default function CloudScreen({ onRequireLogin }: Props) {
 
   const handleUpload = async (session: Session) => {
     if (!bioHubAPI.isConfigured()) {
-      Alert.alert('未配置服务器', '请先在设置中配置服务器地址', [
+      Alert.alert('未配置服务器', '请先配置服务器地址', [
         { text: '取消' },
         { text: '去配置', onPress: () => setShowConfig(true) },
       ]);
@@ -104,14 +139,16 @@ export default function CloudScreen({ onRequireLogin }: Props) {
     }
 
     setUploadingId(session.id);
-    const result = await bioHubAPI.uploadSession(session);
-    setUploadingId(null);
-
-    if (result.success) {
-      Alert.alert('上传成功', `${result.message}\n报告ID: ${result.reportId || '无'}`);
-      loadData();
-    } else {
-      Alert.alert('上传失败', result.message);
+    try {
+      const result = await bioHubAPI.uploadSession(session);
+      if (result.success) {
+        Alert.alert('上传成功', `${result.message}\n报告编号：${result.reportId || '无'}`);
+        loadData();
+      } else {
+        Alert.alert('上传失败', result.message);
+      }
+    } finally {
+      setUploadingId(null);
     }
   };
 
@@ -120,26 +157,14 @@ export default function CloudScreen({ onRequireLogin }: Props) {
     if (report) {
       setSelectedReport(report);
     } else {
-      Alert.alert('分析失败', '无法生成本地分析报告，可能无有效数据');
+      Alert.alert('分析失败', '无法生成本地分析报告，可能该会话没有有效数据');
     }
-  };
-
-  const handleViewReport = async (reportId: string) => {
-    if (bioHubAPI.isConfigured()) {
-      const result = await bioHubAPI.getReport(reportId);
-      if (result.ok && result.report) {
-        setSelectedReport(result.report);
-        return;
-      }
-    }
-    Alert.alert('获取失败', '无法获取报告详情');
   };
 
   /* ─── Render Helpers ─── */
 
-  const getUploadState = (sessionId: number): UploadRecord | undefined => {
-    return bioHubAPI.getUploadRecord(sessionId);
-  };
+  const getUploadState = (sessionId: number): UploadRecord | undefined =>
+    bioHubAPI.getUploadRecord(sessionId);
 
   const renderSessionItem = ({ item }: { item: Session }) => {
     const upload = getUploadState(item.id);
@@ -149,393 +174,405 @@ export default function CloudScreen({ onRequireLogin }: Props) {
       : '进行中';
 
     return (
-      <View style={styles.sessionCard}>
-        <View style={styles.sessionInfo}>
-          <View style={styles.sessionRow}>
-            <Text style={styles.sessionName}>{item.deviceName}</Text>
-            <View
-              style={[
-                styles.connBadge,
-                item.connectionType === 'SLE' ? styles.connBadgeSLE : styles.connBadgeBLE,
-              ]}
-            >
-              <Text style={styles.connBadgeText}>{item.connectionType}</Text>
-            </View>
-          </View>
-          <Text style={styles.sessionTime}>{formatTime(item.startTime)}</Text>
-          <Text style={styles.sessionMeta}>{duration} · {item.packetCount} 数据包</Text>
-          {upload?.state === 'success' && (
-            <Text style={styles.uploadedLabel}>
-              已上传 · {upload.uploadedAt ? formatTime(upload.uploadedAt) : ''}
+      <Card padded={false} style={styles.sessionCard}>
+        <View style={styles.sessionBody}>
+          <View style={styles.sessionTitleRow}>
+            <Text style={[type.h2, styles.sessionName]} numberOfLines={1} ellipsizeMode="middle">
+              {item.deviceName}
             </Text>
-          )}
+            <Pill
+              label={item.connectionType}
+              tone={item.connectionType === 'SLE' ? 'violet' : 'accent'}
+            />
+          </View>
+
+          <Text style={[type.label, styles.sessionTime]} numberOfLines={1}>
+            {formatTime(item.startTime)}
+          </Text>
+
+          <View style={styles.sessionMetaRow}>
+            <Text style={[type.caption, styles.sessionMeta]} numberOfLines={1}>
+              {duration} · {item.packetCount} 个数据包
+            </Text>
+            {upload?.state === 'success' ? (
+              <View style={styles.uploadedTag}>
+                <Icon name="check" size={12} color={color.successText} />
+                <Text style={[type.caption, styles.uploadedText]} numberOfLines={1}>
+                  已上传
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
+
         <View style={styles.sessionActions}>
           {isUploading ? (
-            <ActivityIndicator color="#4A90D9" />
+            <View style={styles.uploadingRow}>
+              <ActivityIndicator color={color.accent} size="small" />
+              <Text style={[type.label, styles.uploadingText]}>上传中…</Text>
+            </View>
           ) : (
             <>
-              <TouchableOpacity
-                style={styles.actionBtn}
+              <Button
+                label="本地分析"
+                icon="barChart"
+                size="sm"
+                style={styles.sessionActionBtn}
                 onPress={() => handleLocalAnalysis(item)}
-              >
-                <Text style={styles.actionBtnText}>本地分析</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.uploadBtn]}
+              />
+              <Button
+                label={upload?.state === 'success' ? '重新上传' : '上传'}
+                icon="upload"
+                size="sm"
+                variant="primary"
+                style={styles.sessionActionBtn}
                 onPress={() => handleUpload(item)}
-              >
-                <Text style={styles.uploadBtnText}>
-                  {upload?.state === 'success' ? '重新上传' : '上传'}
-                </Text>
-              </TouchableOpacity>
+              />
             </>
           )}
         </View>
-      </View>
+      </Card>
     );
   };
 
   const renderReportItem = ({ item }: { item: AnalysisReport }) => {
-    const scoreColor =
-      item.healthScore >= 80 ? '#4ADE80' :
-      item.healthScore >= 60 ? '#FBBF24' : '#EF4444';
+    const hue = scoreHue(item.healthScore);
 
     return (
-      <TouchableOpacity
-        style={styles.reportCard}
+      <Pressable
         onPress={() => setSelectedReport(item)}
+        style={({ pressed }) => [pressed && styles.reportPressed]}
+        accessibilityRole="button"
       >
-        <View style={styles.reportHeader}>
-          <View style={[styles.scoreBadge, { backgroundColor: scoreColor + '20', borderColor: scoreColor }]}>
-            <Text style={[styles.scoreText, { color: scoreColor }]}>{item.healthScore}</Text>
-            <Text style={[styles.scoreLabel, { color: scoreColor }]}>分</Text>
-          </View>
-          <View style={styles.reportInfo}>
-            <Text style={styles.reportTitle}>分析报告</Text>
-            <Text style={styles.reportTime}>{formatTime(item.createdAt)}</Text>
-            <View style={styles.statusRow}>
-              <View style={[styles.statusDot, {
-                backgroundColor: item.status === 'completed' ? '#4ADE80' :
-                  item.status === 'processing' ? '#FBBF24' : '#EF4444'
-              }]} />
-              <Text style={styles.statusText}>
-                {item.status === 'completed' ? '已完成' :
-                 item.status === 'processing' ? '分析中' :
-                 item.status === 'pending' ? '等待中' : '失败'}
+        <Card style={styles.reportCard}>
+          <View style={styles.reportHeader}>
+            <View style={[styles.scoreBadge, { borderColor: hue, backgroundColor: hue + '1A' }]}>
+              <Text
+                style={[styles.scoreText, tabularNums, { color: hue }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {item.healthScore}
               </Text>
             </View>
+            <View style={styles.reportInfo}>
+              <Text style={[type.h2, styles.reportTitle]} numberOfLines={1}>
+                分析报告
+              </Text>
+              <Text style={[type.label, styles.reportTime]} numberOfLines={1}>
+                {formatTime(item.createdAt)}
+              </Text>
+              <View style={styles.reportStatusRow}>
+                <StatusDot
+                  tone={
+                    item.status === 'completed'
+                      ? 'ok'
+                      : item.status === 'processing'
+                      ? 'warn'
+                      : 'bad'
+                  }
+                  size={6}
+                />
+                <Text style={[type.caption, styles.reportStatusText]} numberOfLines={1}>
+                  {item.status === 'completed'
+                    ? '已完成'
+                    : item.status === 'processing'
+                    ? '分析中'
+                    : item.status === 'pending'
+                    ? '等待中'
+                    : '失败'}
+                </Text>
+              </View>
+            </View>
+            <Icon name="chevronRight" size={18} color={color.textMuted} />
           </View>
-        </View>
-        <Text style={styles.reportSummary} numberOfLines={2}>{item.summary}</Text>
-      </TouchableOpacity>
+          <Text style={[type.body, styles.reportSummary]} numberOfLines={3}>
+            {item.summary}
+          </Text>
+        </Card>
+      </Pressable>
     );
   };
+
+  /** Shared card for one analysed vital: title, state pill, mean and range. */
+  const renderVitalDetail = (
+    title: string,
+    v: { avg: number; min: number; max: number; status: string; message: string },
+    hue: string,
+  ) => (
+    <Card style={styles.detailCard}>
+      <View style={styles.detailHeader}>
+        <Text style={[type.h2, styles.detailTitle]} numberOfLines={1}>
+          {title}
+        </Text>
+        <Pill label={v.message} tone={v.status === 'normal' ? 'ok' : v.status === 'warning' ? 'warn' : 'bad'} />
+      </View>
+      <DetailRow label="均值" value={String(v.avg || '--')} valueColor={hue} />
+      <DetailRow label="范围" value={`${v.min || '--'} ~ ${v.max || '--'}`} last />
+    </Card>
+  );
 
   /* ─── Report Detail Modal ─── */
 
   const renderReportModal = () => {
     if (!selectedReport) return null;
-
     const r = selectedReport;
-    const scoreColor =
-      r.healthScore >= 80 ? '#4ADE80' :
-      r.healthScore >= 60 ? '#FBBF24' : '#EF4444';
-
-    const statusColors: Record<string, string> = {
-      normal: '#4ADE80',
-      warning: '#FBBF24',
-      critical: '#EF4444',
-    };
+    const hue = scoreHue(r.healthScore);
 
     return (
-      <Modal visible animationType="slide" transparent={false}>
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>分析报告</Text>
-            <TouchableOpacity
-              style={styles.modalClose}
-              onPress={() => setSelectedReport(null)}
-            >
-              <Text style={styles.modalCloseText}>关闭</Text>
-            </TouchableOpacity>
-          </View>
-
-          <FlatList
-            data={[1]}
-            keyExtractor={() => 'report'}
-            renderItem={() => (
-              <View style={styles.modalBody}>
-                {/* Health Score */}
-                <View style={styles.scoreCard}>
-                  <Text style={[styles.scoreLarge, { color: scoreColor }]}>{r.healthScore}</Text>
-                  <Text style={styles.scoreSubtitle}>健康评分</Text>
-                  <Text style={styles.reportSummaryFull}>{r.summary}</Text>
-                </View>
-
-                {/* Vital Details */}
-                <Text style={styles.sectionTitle}>详细分析</Text>
-
-                {renderVitalDetail('心率 (PPG)', r.details.hr, '#EF4444')}
-                {renderVitalDetail('血氧饱和度', r.details.spo2, '#3B82F6')}
-
-                {/* ECG */}
-                <View style={styles.detailCard}>
-                  <View style={styles.detailHeader}>
-                    <Text style={[styles.detailTitle, { color: '#F97316' }]}>心电分析</Text>
-                    <View style={[styles.detailStatusBadge, {
-                      backgroundColor: (statusColors[r.details.ecg.status] || '#6B7280') + '20',
-                    }]}>
-                      <Text style={[styles.detailStatusText, {
-                        color: statusColors[r.details.ecg.status] || '#6B7280',
-                      }]}>
-                        {r.details.ecg.message}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>平均心率</Text>
-                    <Text style={styles.detailValue}>{r.details.ecg.avgHr || '--'} BPM</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>心律状态</Text>
-                    <Text style={styles.detailValue}>{r.details.ecg.rhythmStatus}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>信号质量</Text>
-                    <Text style={styles.detailValue}>{r.details.ecg.signalQuality}</Text>
-                  </View>
-                </View>
-
-                {/* Blood Pressure */}
-                <View style={styles.detailCard}>
-                  <View style={styles.detailHeader}>
-                    <Text style={[styles.detailTitle, { color: '#8B5CF6' }]}>血压分析</Text>
-                    <View style={[styles.detailStatusBadge, {
-                      backgroundColor: (statusColors[r.details.bp.status] || '#6B7280') + '20',
-                    }]}>
-                      <Text style={[styles.detailStatusText, {
-                        color: statusColors[r.details.bp.status] || '#6B7280',
-                      }]}>
-                        {r.details.bp.message}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>收缩压 / 舒张压</Text>
-                    <Text style={styles.detailValue}>
-                      {r.details.bp.avgSbp || '--'} / {r.details.bp.avgDbp || '--'} mmHg
-                    </Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>分级</Text>
-                    <Text style={styles.detailValue}>{r.details.bp.classification}</Text>
-                  </View>
-                </View>
-
-                {renderVitalDetail('体温', r.details.temp, '#10B981')}
-
-                {/* Recommendations */}
-                <Text style={styles.sectionTitle}>健康建议</Text>
-                <View style={styles.recCard}>
-                  {r.recommendations.map((rec, i) => (
-                    <View key={i} style={styles.recRow}>
-                      <Text style={styles.recBullet}>{i + 1}</Text>
-                      <Text style={styles.recText}>{rec}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                {r.id.startsWith('local_') && (
-                  <View style={styles.localNote}>
-                    <Text style={styles.localNoteText}>
-                      本报告由本地算法生成。上传数据至服务器可获取更精准的 AI 分析。
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )}
+      <Modal
+        visible
+        animationType="slide"
+        onRequestClose={() => setSelectedReport(null)}
+      >
+        <Screen edges={['bottom', 'left', 'right']}>
+          <ScreenHeader
+            title="分析报告"
+            subtitle={formatTime(r.createdAt)}
+            actions={
+              <Button label="关闭" size="sm" onPress={() => setSelectedReport(null)} />
+            }
           />
-        </SafeAreaView>
-      </Modal>
-    );
-  };
 
-  const renderVitalDetail = (
-    title: string,
-    vital: { avg: number; min: number; max: number; status: string; message: string },
-    color: string,
-  ) => {
-    const statusColors: Record<string, string> = {
-      normal: '#4ADE80', warning: '#FBBF24', critical: '#EF4444',
-    };
-    return (
-      <View style={styles.detailCard}>
-        <View style={styles.detailHeader}>
-          <Text style={[styles.detailTitle, { color }]}>{title}</Text>
-          <View style={[styles.detailStatusBadge, {
-            backgroundColor: (statusColors[vital.status] || '#6B7280') + '20',
-          }]}>
-            <Text style={[styles.detailStatusText, {
-              color: statusColors[vital.status] || '#6B7280',
-            }]}>
-              {vital.message}
-            </Text>
-          </View>
-        </View>
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>均值</Text>
-          <Text style={[styles.detailValue, { color }]}>{vital.avg || '--'}</Text>
-        </View>
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>范围</Text>
-          <Text style={styles.detailValue}>{vital.min || '--'} ~ {vital.max || '--'}</Text>
-        </View>
-      </View>
+          <ScrollView contentContainerStyle={styles.modalBody}>
+            <Card style={styles.scoreCard}>
+              <Text
+                style={[styles.scoreLarge, tabularNums, { color: hue }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {r.healthScore}
+              </Text>
+              <Text style={[type.label, styles.scoreSubtitle]}>健康评分</Text>
+              <Text style={[type.body, styles.reportSummaryFull]}>{r.summary}</Text>
+            </Card>
+
+            <SectionTitle first>详细分析</SectionTitle>
+
+            {renderVitalDetail('心率 (PPG)', r.details.hr, vital.hr)}
+            {renderVitalDetail('血氧饱和度', r.details.spo2, vital.spo2)}
+
+            <Card style={styles.detailCard}>
+              <View style={styles.detailHeader}>
+                <Text style={[type.h2, styles.detailTitle]} numberOfLines={1}>
+                  心电分析
+                </Text>
+                <Pill
+                  label={r.details.ecg.message}
+                  tone={
+                    r.details.ecg.status === 'normal'
+                      ? 'ok'
+                      : r.details.ecg.status === 'warning'
+                      ? 'warn'
+                      : 'bad'
+                  }
+                />
+              </View>
+              <DetailRow label="平均心率" value={`${r.details.ecg.avgHr || '--'} BPM`} valueColor={vital.ecgHr} />
+              <DetailRow label="心律状态" value={r.details.ecg.rhythmStatus} />
+              <DetailRow label="信号质量" value={r.details.ecg.signalQuality} last />
+            </Card>
+
+            <Card style={styles.detailCard}>
+              <View style={styles.detailHeader}>
+                <Text style={[type.h2, styles.detailTitle]} numberOfLines={1}>
+                  血压分析
+                </Text>
+                <Pill
+                  label={r.details.bp.message}
+                  tone={
+                    r.details.bp.status === 'normal'
+                      ? 'ok'
+                      : r.details.bp.status === 'warning'
+                      ? 'warn'
+                      : 'bad'
+                  }
+                />
+              </View>
+              <DetailRow
+                label="收缩压 / 舒张压"
+                value={`${r.details.bp.avgSbp || '--'} / ${r.details.bp.avgDbp || '--'} mmHg`}
+                valueColor={vital.sbp}
+              />
+              <DetailRow label="分级" value={r.details.bp.classification} last />
+            </Card>
+
+            {renderVitalDetail('体温', r.details.temp, vital.temp)}
+
+            <SectionTitle>健康建议</SectionTitle>
+            <Card>
+              {r.recommendations.length === 0 ? (
+                <Text style={[type.body, styles.noRec]}>本次分析没有额外建议。</Text>
+              ) : (
+                r.recommendations.map((rec, i) => (
+                  <View key={i} style={[styles.recRow, i > 0 && styles.recRowSpaced]}>
+                    <View style={styles.recBullet}>
+                      <Text style={[type.caption, styles.recBulletText]}>{i + 1}</Text>
+                    </View>
+                    <Text style={[type.body, styles.recText]}>{rec}</Text>
+                  </View>
+                ))
+              )}
+            </Card>
+
+            {r.id.startsWith('local_') ? (
+              <View style={styles.localNote}>
+                <Icon name="info" size={15} color={color.accentText} />
+                <Text style={[type.caption, styles.localNoteText]}>
+                  本报告由本地算法生成。将数据上传至服务器可获得更精确的分析。
+                </Text>
+              </View>
+            ) : null}
+          </ScrollView>
+        </Screen>
+      </Modal>
     );
   };
 
   /* ─── Config Modal ─── */
 
   const renderConfigModal = () => (
-    <Modal visible={showConfig} animationType="slide" transparent>
-      <View style={styles.configOverlay}>
-        <View style={styles.configPanel}>
-          <Text style={styles.configTitle}>服务器配置</Text>
+    <Modal
+      visible={showConfig}
+      animationType="slide"
+      transparent
+      onRequestClose={() => setShowConfig(false)}
+    >
+      <KeyboardAvoidingView
+        style={styles.configOverlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.configScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Card style={styles.configPanel}>
+            <Text style={[type.h1, styles.configTitle]}>服务器地址</Text>
+            <Text style={[type.body, styles.configDesc]}>
+              登录后使用 JWT 令牌自动认证，无需 API 密钥。
+            </Text>
 
-          <Text style={styles.inputLabel}>服务器地址</Text>
-          <TextInput
-            style={styles.input}
-            value={serverUrl}
-            onChangeText={setServerUrl}
-            placeholder="http://156.226.176.22"
-            placeholderTextColor="#4B5563"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-          />
+            <Text style={[type.label, styles.inputLabel]}>地址</Text>
+            <TextInput
+              style={[type.body, styles.input]}
+              value={serverUrl}
+              onChangeText={setServerUrl}
+              placeholder="http://156.226.176.22"
+              placeholderTextColor={color.textFaint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              accessibilityLabel="服务器地址"
+            />
 
-          <Text style={styles.hintText}>
-            登录后使用 JWT 令牌自动认证，无需 API 密钥。
-          </Text>
+            {serverStatus ? (
+              <View
+                style={[
+                  styles.statusBanner,
+                  {
+                    backgroundColor: serverStatus.online ? color.successSurface : color.dangerSurface,
+                    borderColor: serverStatus.online ? color.successBorder : color.dangerBorder,
+                  },
+                ]}
+              >
+                <StatusDot tone={serverStatus.online ? 'ok' : 'bad'} />
+                <Text style={[type.label, styles.statusMessage]} numberOfLines={2}>
+                  {serverStatus.message}
+                </Text>
+                {serverStatus.latencyMs != null ? (
+                  <Text style={[type.caption, styles.statusLatency]}>{serverStatus.latencyMs}ms</Text>
+                ) : null}
+              </View>
+            ) : null}
 
-          {serverStatus && (
-            <View style={[styles.statusBanner, {
-              backgroundColor: serverStatus.online ? '#052E16' : '#450A0A',
-              borderColor: serverStatus.online ? '#166534' : '#7F1D1D',
-            }]}>
-              <View style={[styles.statusIndicator, {
-                backgroundColor: serverStatus.online ? '#4ADE80' : '#EF4444',
-              }]} />
-              <Text style={styles.statusMessage}>{serverStatus.message}</Text>
-              {serverStatus.latencyMs != null && (
-                <Text style={styles.statusLatency}>{serverStatus.latencyMs}ms</Text>
-              )}
+            <View style={styles.configActions}>
+              <Button
+                label="测试连接"
+                variant="secondary"
+                loading={checking}
+                style={styles.configBtn}
+                onPress={checkConnection}
+              />
+              <Button
+                label="保存"
+                variant="primary"
+                style={styles.configBtn}
+                onPress={saveConfig}
+              />
             </View>
-          )}
-
-          <View style={styles.configActions}>
-            <TouchableOpacity
-              style={[styles.configBtn, styles.configBtnSecondary]}
-              onPress={checkConnection}
-              disabled={checking}
-            >
-              {checking ? (
-                <ActivityIndicator color="#93C5FD" size="small" />
-              ) : (
-                <Text style={styles.configBtnSecondaryText}>测试连接</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.configBtn, styles.configBtnPrimary]}
-              onPress={saveConfig}
-            >
-              <Text style={styles.configBtnPrimaryText}>保存</Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity
-            style={styles.configCancel}
-            onPress={() => setShowConfig(false)}
-          >
-            <Text style={styles.configCancelText}>取消</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+            <Button label="取消" variant="ghost" block onPress={() => setShowConfig(false)} />
+          </Card>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 
   /* ─── Main Render ─── */
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>云服务</Text>
-          <Text style={styles.subtitle}>数据上传与分析报告</Text>
-        </View>
-        <TouchableOpacity style={styles.configToggle} onPress={() => setShowConfig(true)}>
-          <Text style={styles.configToggleText}>配置</Text>
-        </TouchableOpacity>
-      </View>
+  const configured = bioHubAPI.isConfigured();
 
-      {/* Server Status Bar */}
+  return (
+    <Screen>
+      <ScreenHeader
+        title="云服务"
+        subtitle="数据上传与分析报告"
+        actions={<Button label="配置" size="sm" onPress={() => setShowConfig(true)} />}
+      />
+
+      {/* Server reachability: one dot, carrying real state. */}
       <View style={styles.serverBar}>
-        <View style={[styles.serverDot, {
-          backgroundColor: serverStatus?.online ? '#4ADE80' :
-            bioHubAPI.isConfigured() ? '#FBBF24' : '#6B7280',
-        }]} />
-        <Text style={styles.serverText}>
+        <StatusDot
+          tone={serverStatus?.online ? 'ok' : configured ? 'warn' : 'idle'}
+        />
+        <Text style={[type.label, styles.serverText]} numberOfLines={1}>
           {serverStatus?.online
-            ? `已连接 (${serverStatus.latencyMs}ms)`
-            : bioHubAPI.isConfigured()
-              ? '未连接'
-              : '未配置服务器'}
+            ? `已连接 · ${serverStatus.latencyMs ?? 0} ms`
+            : configured
+            ? '服务器未连接'
+            : '未配置服务器'}
         </Text>
-        {bioHubAPI.isConfigured() && (
-          <TouchableOpacity onPress={checkConnection} disabled={checking}>
-            <Text style={styles.refreshText}>{checking ? '检查中...' : '刷新'}</Text>
-          </TouchableOpacity>
-        )}
+        {configured ? (
+          <Pressable onPress={checkConnection} disabled={checking} hitSlop={10}>
+            <Text style={[type.label, styles.refreshText]}>
+              {checking ? '检查中…' : '刷新'}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {/* 未登录提示（离线模式）：登录后才可上传与分析 */}
-      {!user && (
-        <TouchableOpacity
-          style={styles.loginBanner}
+      {!user ? (
+        <Pressable
+          style={({ pressed }) => [styles.loginBanner, pressed && styles.loginBannerPressed]}
           onPress={onRequireLogin}
-          activeOpacity={0.7}
+          accessibilityRole="button"
         >
-          <Text style={styles.loginBannerText}>
+          <Icon name="user" size={16} color={color.accentText} />
+          <Text style={[type.label, styles.loginBannerText]} numberOfLines={2}>
             未登录（离线模式）· 点此登录后可上传数据与查看报告
           </Text>
-        </TouchableOpacity>
-      )}
+          <Icon name="chevronRight" size={16} color={color.accentText} />
+        </Pressable>
+      ) : null}
 
-      {/* View Mode Toggle */}
       <View style={styles.modeBar}>
-        <TouchableOpacity
-          style={[styles.modeTab, viewMode === 'sessions' && styles.modeTabActive]}
-          onPress={() => setViewMode('sessions')}
-        >
-          <Text style={[styles.modeTabText, viewMode === 'sessions' && styles.modeTabTextActive]}>
-            会话数据 ({sessions.length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.modeTab, viewMode === 'reports' && styles.modeTabActive]}
-          onPress={() => setViewMode('reports')}
-        >
-          <Text style={[styles.modeTabText, viewMode === 'reports' && styles.modeTabTextActive]}>
-            分析报告 ({reports.length})
-          </Text>
-        </TouchableOpacity>
+        <SegmentedControl
+          options={VIEW_OPTIONS.map((o) => ({
+            ...o,
+            count: o.value === 'sessions' ? sessions.length : reports.length,
+          }))}
+          value={viewMode}
+          onChange={setViewMode}
+        />
       </View>
 
-      {/* Content */}
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color="#4A90D9" size="large" />
+        <View style={styles.list}>
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
         </View>
       ) : viewMode === 'sessions' ? (
         <FlatList
@@ -543,11 +580,13 @@ export default function CloudScreen({ onRequireLogin }: Props) {
           keyExtractor={(s) => String(s.id)}
           renderItem={renderSessionItem}
           contentContainerStyle={styles.list}
+          ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
           ListEmptyComponent={
-            <View style={styles.center}>
-              <Text style={styles.emptyTitle}>暂无会话</Text>
-              <Text style={styles.emptyText}>连接设备采集数据后将在此显示</Text>
-            </View>
+            <EmptyState
+              icon="server"
+              title="暂无会话"
+              description="连接传感器并采集数据后，会话会出现在这里，可上传到服务器获取 AI 分析报告，或直接在本地分析。"
+            />
           }
         />
       ) : (
@@ -556,315 +595,184 @@ export default function CloudScreen({ onRequireLogin }: Props) {
           keyExtractor={(r) => r.id}
           renderItem={renderReportItem}
           contentContainerStyle={styles.list}
+          ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
           ListEmptyComponent={
-            <View style={styles.center}>
-              <Text style={styles.emptyTitle}>暂无报告</Text>
-              <Text style={styles.emptyText}>
-                上传会话数据或使用本地分析生成报告
-              </Text>
-            </View>
+            <EmptyState
+              icon="fileText"
+              title="暂无报告"
+              description={
+                configured
+                  ? '上传会话数据或使用本地分析即可生成报告。'
+                  : '先在右上角「配置」中填写服务器地址，然后上传会话数据以生成报告。'
+              }
+            />
           }
         />
       )}
 
       {renderConfigModal()}
       {renderReportModal()}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 /* ─── Styles ─── */
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0E1A' },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 48,
-    paddingBottom: 16,
-    paddingHorizontal: 20,
-    backgroundColor: '#111827',
-  },
-  title: { fontSize: 24, fontWeight: '800', color: '#E0E7FF' },
-  subtitle: { fontSize: 13, color: '#6B7280', marginTop: 4 },
-  loginBanner: {
-    backgroundColor: '#1E293B',
-    borderColor: '#334155',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginHorizontal: 20,
-    marginTop: 12,
-  },
-  loginBannerText: { color: '#93C5FD', fontSize: 12, textAlign: 'center' },
-  configToggle: {
-    backgroundColor: '#1E3A5F',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2563EB',
-  },
-  configToggleText: { color: '#93C5FD', fontWeight: '600', fontSize: 13 },
-
   serverBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#111827',
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    backgroundColor: color.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#1F2937',
-    gap: 8,
+    borderBottomColor: color.divider,
   },
-  serverDot: { width: 8, height: 8, borderRadius: 4 },
-  serverText: { flex: 1, fontSize: 12, color: '#9CA3AF' },
-  refreshText: { color: '#60A5FA', fontSize: 12, fontWeight: '600' },
+  serverText: { flex: 1, minWidth: 0, color: color.textSecondary, fontWeight: '400' },
+  refreshText: { color: color.accentText },
+
+  loginBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: color.accentSurface,
+    borderWidth: 1,
+    borderColor: color.accentBorder,
+    borderRadius: radius.md,
+    paddingVertical: space.md,
+    paddingHorizontal: space.md,
+    marginHorizontal: space.md,
+    marginTop: space.md,
+  },
+  loginBannerPressed: { opacity: 0.75 },
+  loginBannerText: { flex: 1, minWidth: 0, color: color.accentText, fontWeight: '400' },
 
   modeBar: {
+    paddingHorizontal: space.md,
+    paddingTop: space.md,
+    paddingBottom: space.sm,
+    backgroundColor: color.surface,
+  },
+
+  list: { padding: space.md, paddingBottom: space.xxxl, flexGrow: 1 },
+
+  /* Session cards */
+  sessionCard: { padding: space.lg, gap: space.md },
+  sessionBody: { gap: space.xxs },
+  sessionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  sessionName: { color: color.text, flexShrink: 1, minWidth: 0 },
+  sessionTime: { color: color.textSecondary, fontWeight: '400' },
+  sessionMetaRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: space.xxs },
+  sessionMeta: { color: color.textMuted, flexShrink: 1 },
+  uploadedTag: { flexDirection: 'row', alignItems: 'center', gap: space.xs, flexShrink: 0 },
+  uploadedText: { color: color.successText },
+  sessionActions: { flexDirection: 'row', gap: space.sm },
+  sessionActionBtn: { flex: 1 },
+  uploadingRow: {
+    flex: 1,
     flexDirection: 'row',
-    backgroundColor: '#111827',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-    gap: 8,
-  },
-  modeTab: {
-    flex: 1,
-    paddingVertical: 8,
     alignItems: 'center',
-    borderRadius: 8,
-    backgroundColor: '#1F2937',
+    justifyContent: 'center',
+    gap: space.sm,
+    paddingVertical: space.md,
   },
-  modeTabActive: { backgroundColor: '#1E3A5F' },
-  modeTabText: { fontSize: 13, color: '#6B7280', fontWeight: '600' },
-  modeTabTextActive: { color: '#93C5FD' },
+  uploadingText: { color: color.textMuted, fontWeight: '400' },
 
-  list: { padding: 12, paddingBottom: 100 },
-
-  /* Session Cards */
-  sessionCard: {
-    backgroundColor: '#1F2937',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  sessionInfo: { marginBottom: 10 },
-  sessionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sessionName: { fontSize: 15, fontWeight: '700', color: '#E5E7EB' },
-  connBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  connBadgeBLE: { backgroundColor: '#1E3A5F' },
-  connBadgeSLE: { backgroundColor: '#3B1F5E' },
-  connBadgeText: { fontSize: 9, fontWeight: '800', color: '#C4B5FD' },
-  sessionTime: { fontSize: 12, color: '#9CA3AF', marginTop: 4 },
-  sessionMeta: { fontSize: 11, color: '#6B7280', marginTop: 2 },
-  uploadedLabel: { fontSize: 11, color: '#4ADE80', marginTop: 4 },
-  sessionActions: { flexDirection: 'row', gap: 8 },
-  actionBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  actionBtnText: { color: '#93C5FD', fontSize: 13, fontWeight: '600' },
-  uploadBtn: { backgroundColor: '#1E3A5F', borderColor: '#2563EB' },
-  uploadBtnText: { color: '#60A5FA', fontSize: 13, fontWeight: '600' },
-
-  /* Report Cards */
-  reportCard: {
-    backgroundColor: '#1F2937',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  reportHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  /* Report cards */
+  reportPressed: { opacity: 0.75 },
+  reportCard: { gap: space.md },
+  reportHeader: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   scoreBadge: {
-    width: 52,
+    minWidth: 52,
     height: 52,
+    paddingHorizontal: space.sm,
     borderRadius: 26,
     borderWidth: 2,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
+    flexShrink: 0,
   },
-  scoreText: { fontSize: 20, fontWeight: '800' },
-  scoreLabel: { fontSize: 9, fontWeight: '600', marginTop: -2 },
-  reportInfo: { flex: 1 },
-  reportTitle: { fontSize: 15, fontWeight: '700', color: '#E5E7EB' },
-  reportTime: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusText: { fontSize: 11, color: '#9CA3AF' },
-  reportSummary: { fontSize: 13, color: '#D1D5DB', lineHeight: 20 },
+  scoreText: { fontSize: 20, lineHeight: 26, fontWeight: '700' },
+  reportInfo: { flex: 1, minWidth: 0, gap: space.xxs },
+  reportTitle: { color: color.text },
+  reportTime: { color: color.textMuted, fontWeight: '400' },
+  reportStatusRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2, marginTop: space.xxs },
+  reportStatusText: { color: color.textSecondary },
+  reportSummary: { color: color.textSecondary },
 
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 80 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#6B7280', marginBottom: 8 },
-  emptyText: { fontSize: 14, color: '#4B5563', textAlign: 'center' },
+  /* Report modal */
+  modalBody: { padding: space.md, paddingBottom: space.xxxl },
+  scoreCard: { alignItems: 'center', gap: space.xs, paddingVertical: space.xxl },
+  scoreLarge: { fontSize: 56, lineHeight: 64, fontWeight: '700' },
+  scoreSubtitle: { color: color.textMuted },
+  reportSummaryFull: { color: color.textSecondary, textAlign: 'center', marginTop: space.sm },
 
-  /* Config Modal */
-  configOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  configPanel: {
-    backgroundColor: '#1F2937',
-    borderRadius: 16,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  configTitle: { fontSize: 20, fontWeight: '800', color: '#E0E7FF', marginBottom: 20 },
-  inputLabel: { fontSize: 13, color: '#9CA3AF', marginBottom: 6, fontWeight: '600' },
-  hintText: { fontSize: 12, color: '#6B7280', marginTop: 6, marginBottom: 4 },
-  input: {
-    backgroundColor: '#0F172A',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#E5E7EB',
-    borderWidth: 1,
-    borderColor: '#374151',
-    marginBottom: 16,
-  },
-  statusBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 8,
-    marginBottom: 16,
-  },
-  statusIndicator: { width: 8, height: 8, borderRadius: 4 },
-  statusMessage: { flex: 1, fontSize: 13, color: '#D1D5DB' },
-  statusLatency: { fontSize: 12, color: '#9CA3AF' },
-  configActions: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-  configBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
-  configBtnSecondary: { backgroundColor: '#0F172A', borderWidth: 1, borderColor: '#374151' },
-  configBtnSecondaryText: { color: '#93C5FD', fontWeight: '600', fontSize: 14 },
-  configBtnPrimary: { backgroundColor: '#2563EB' },
-  configBtnPrimaryText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  configCancel: { alignItems: 'center', paddingVertical: 8 },
-  configCancelText: { color: '#6B7280', fontSize: 14 },
-
-  /* Report Modal */
-  modalContainer: { flex: 1, backgroundColor: '#0A0E1A' },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 48,
-    paddingBottom: 12,
-    paddingHorizontal: 20,
-    backgroundColor: '#111827',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1F2937',
-  },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: '#E0E7FF' },
-  modalClose: {
-    backgroundColor: '#1E3A5F',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  modalCloseText: { color: '#93C5FD', fontWeight: '600', fontSize: 13 },
-  modalBody: { padding: 16, paddingBottom: 40 },
-
-  scoreCard: {
-    backgroundColor: '#1F2937',
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  scoreLarge: { fontSize: 56, fontWeight: '800' },
-  scoreSubtitle: { fontSize: 14, color: '#9CA3AF', marginTop: -4 },
-  reportSummaryFull: {
-    fontSize: 14,
-    color: '#D1D5DB',
-    textAlign: 'center',
-    marginTop: 12,
-    lineHeight: 22,
-  },
-
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#E0E7FF',
-    marginBottom: 10,
-    marginTop: 4,
-  },
-
-  detailCard: {
-    backgroundColor: '#1F2937',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
+  detailCard: { marginBottom: space.sm },
   detailHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
-  },
-  detailTitle: { fontSize: 14, fontWeight: '700' },
-  detailStatusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  detailStatusText: { fontSize: 11, fontWeight: '700' },
-  detailRow: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
+    gap: space.sm,
+    marginBottom: space.xs,
   },
-  detailLabel: { fontSize: 13, color: '#9CA3AF' },
-  detailValue: { fontSize: 14, fontWeight: '600', color: '#E5E7EB' },
+  detailTitle: { color: color.textSecondary, flexShrink: 1, minWidth: 0 },
 
-  recCard: {
-    backgroundColor: '#1F2937',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#374151',
-    marginBottom: 16,
-  },
-  recRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
+  noRec: { color: color.textMuted },
+  recRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.md },
+  recRowSpaced: { marginTop: space.md },
   recBullet: {
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: '#1E3A5F',
-    textAlign: 'center',
-    lineHeight: 22,
-    color: '#93C5FD',
-    fontSize: 12,
-    fontWeight: '700',
+    backgroundColor: color.accentSurface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
-  recText: { flex: 1, fontSize: 14, color: '#D1D5DB', lineHeight: 22 },
+  recBulletText: { color: color.accentText, fontWeight: '700' },
+  recText: { flex: 1, minWidth: 0, color: color.textSecondary },
 
   localNote: {
-    backgroundColor: '#1E293B',
-    borderRadius: 8,
-    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    backgroundColor: color.subtle,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: color.border,
+    padding: space.md,
+    marginTop: space.md,
   },
-  localNoteText: { fontSize: 12, color: '#94A3B8', textAlign: 'center', lineHeight: 18 },
+  localNoteText: { flex: 1, minWidth: 0, color: color.textMuted, lineHeight: 16 },
+
+  /* Config modal */
+  configOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)' },
+  configScroll: { flexGrow: 1, justifyContent: 'center', padding: space.xl },
+  configPanel: { gap: space.md, padding: space.xl },
+  configTitle: { color: color.text },
+  configDesc: { color: color.textMuted },
+  inputLabel: { color: color.textSecondary, marginBottom: -space.xs },
+  input: {
+    backgroundColor: color.sunken,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    color: color.text,
+    minHeight: 48,
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    padding: space.md,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+  },
+  statusMessage: { flex: 1, minWidth: 0, color: color.textSecondary, fontWeight: '400' },
+  statusLatency: { color: color.textMuted, flexShrink: 0 },
+  configActions: { flexDirection: 'row', gap: space.sm },
+  configBtn: { flex: 1 },
 });

@@ -16,6 +16,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authStore, AuthSession, AuthUser } from './auth';
 import { Session, SessionStats, getSessionStats, getSessionMeasurements } from './storage';
+import { WaveformUpload, QualityUpload, takeSessionWaveforms } from './waveform';
 
 /* ─── Types ─── */
 
@@ -31,6 +32,10 @@ export interface UploadPayload {
   startTime: number;
   endTime: number | null;
   measurements: MeasurementRow[];
+  /** 协议 v4 波形段（可选）。老版行为：不带这两项时服务器行为完全不变。 */
+  waveforms?: WaveformUpload[];
+  /** 协议 v4 链路质量（由 WaveformAssembler.summary() 转成服务器字段名） */
+  quality?: QualityUpload;
 }
 
 export interface MeasurementRow {
@@ -382,7 +387,11 @@ class BioHubAPI {
 
   /* ─── Upload session ─── */
 
-  async uploadSession(session: Session): Promise<UploadResult> {
+  async uploadSession(
+    session: Session,
+    waveforms?: WaveformUpload[],
+    quality?: QualityUpload,
+  ): Promise<UploadResult> {
     if (!this.isAuthenticated()) {
       return { success: false, message: '请先登录后再上传' };
     }
@@ -419,6 +428,19 @@ class BioHubAPI {
           flags: m.flags,
         })),
       };
+
+      // 协议 v4：带上波形与链路质量（服务器会独立核算丢样，不轻信这里的计数）。
+      // 没有波形时不带这两项 —— 服务器行为与老版本完全一致。
+      // 波形来自录制时暂存的载荷（见 waveform.ts 的 stash/take 说明）。
+      const stashed = waveforms ? undefined : takeSessionWaveforms(session.id);
+      const wf = waveforms ?? stashed?.waveforms;
+      const q = quality ?? stashed?.quality;
+      if (wf && wf.length > 0) {
+        payload.waveforms = wf;
+      }
+      if (q) {
+        payload.quality = q;
+      }
 
       const result = await this.request<{ reportId: string; message: string }>(
         'POST',

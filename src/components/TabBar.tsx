@@ -1,12 +1,27 @@
 /**
- * Custom bottom tab bar component with dark theme styling.
+ * Bottom tab bar.
+ *
+ * Two things were wrong with the previous version and both are fixed here:
+ *
+ *  1. `paddingBottom: 20` was a hard-coded guess. Expo SDK 54+ ships Android
+ *     edge-to-edge, so the system gesture bar is drawn *over* the app; on a
+ *     device with a 34pt gesture inset the labels sat underneath it. The bar
+ *     now pads by the real bottom inset.
+ *
+ *  2. The badge was absolutely positioned at `right: '25%'` inside a flexed
+ *     tab, so it drifted with the label width and could overlap the label of
+ *     the neighbouring tab. It is now laid out in normal flow.
  */
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Icon, { type IconName } from './Icon';
+import { color, radius, space, type } from '../theme';
 
 export interface TabItem {
   id: string;
   label: string;
+  icon: IconName;
   badge?: string | number;
 }
 
@@ -17,43 +32,56 @@ interface TabBarProps {
   accentColor?: string;
 }
 
+/** Minimum leg height before the device's own bottom inset is added. */
+const BAR_HEIGHT = 56;
+
 export default function TabBar({
   tabs,
   activeTab,
   onSelect,
-  accentColor = '#4A90D9',
+  accentColor = color.accent,
 }: TabBarProps) {
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        // A device with no gesture inset still gets a comfortable 8pt floor.
+        { paddingBottom: Math.max(insets.bottom, space.sm) },
+      ]}
+    >
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab;
+        const tint = isActive ? accentColor : color.textMuted;
+        const showBadge = tab.badge !== undefined && tab.badge !== 0;
+
         return (
-          <TouchableOpacity
+          <Pressable
             key={tab.id}
-            style={[styles.tab, isActive && styles.tabActive]}
             onPress={() => onSelect(tab.id)}
-            activeOpacity={0.7}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isActive }}
+            accessibilityLabel={
+              showBadge ? `${tab.label}，${tab.badge} 项` : tab.label
+            }
+            style={({ pressed }) => [styles.tab, pressed && styles.tabPressed]}
           >
-            <View
-              style={[
-                styles.indicator,
-                isActive && { backgroundColor: accentColor },
-              ]}
-            />
-            <Text
-              style={[
-                styles.label,
-                isActive && { color: accentColor, fontWeight: '700' },
-              ]}
-            >
+            <View style={[styles.indicator, isActive && { backgroundColor: accentColor }]} />
+            <View style={styles.iconWrap}>
+              <Icon name={tab.icon} size={21} color={tint} />
+              {showBadge ? (
+                <View style={[styles.badge, { backgroundColor: accentColor }]}>
+                  <Text style={styles.badgeText} numberOfLines={1}>
+                    {tab.badge}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={[type.caption, styles.label, { color: tint }]} numberOfLines={1}>
               {tab.label}
             </Text>
-            {tab.badge !== undefined && tab.badge !== 0 && (
-              <View style={[styles.badge, { backgroundColor: accentColor }]}>
-                <Text style={styles.badgeText}>{tab.badge}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          </Pressable>
         );
       })}
     </View>
@@ -63,44 +91,39 @@ export default function TabBar({
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    backgroundColor: '#111827',
+    backgroundColor: color.surface,
     borderTopWidth: 1,
-    borderTopColor: '#1F2937',
-    paddingBottom: 20,
-    paddingTop: 4,
+    borderTopColor: color.divider,
   },
   tab: {
     flex: 1,
+    minHeight: BAR_HEIGHT,
     alignItems: 'center',
-    paddingVertical: 8,
+    justifyContent: 'center',
+    paddingTop: space.sm,
+    gap: space.xs,
   },
-  tabActive: {},
+  tabPressed: { opacity: 0.6 },
   indicator: {
-    width: 20,
-    height: 3,
-    borderRadius: 1.5,
+    position: 'absolute',
+    top: 0,
+    width: 24,
+    height: 2,
+    borderRadius: 1,
     backgroundColor: 'transparent',
-    marginBottom: 4,
   },
-  label: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
+  iconWrap: { width: 34, height: 22, alignItems: 'center', justifyContent: 'center' },
+  label: { fontWeight: '600' },
   badge: {
     position: 'absolute',
-    top: 2,
-    right: '25%',
+    top: -5,
+    right: -6,
     minWidth: 16,
     height: 16,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderRadius: radius.pill,
     paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  badgeText: {
-    fontSize: 9,
-    color: '#fff',
-    fontWeight: '700',
-  },
+  badgeText: { color: color.onAccent, fontSize: 10, lineHeight: 14, fontWeight: '700' },
 });

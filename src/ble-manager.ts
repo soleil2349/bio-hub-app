@@ -17,13 +17,23 @@ import {
   SLE_DEVICE_NAME,
   BioPkt,
   ConnectionType,
+  WaveformFrame,
+  StatsFrame,
+  FrameKind,
+  classifyFrame,
   parseBioPkt,
+  parseWaveformFrame,
+  parseStatsFrame,
   buildCtrlPkt,
   detectConnectionType,
+  streamSeq,
   CMD_HEARTBEAT,
   CMD_TOGGLE,
   CMD_SET_LED,
   CMD_PING,
+  CMD_STREAM,
+  CMD_SET_RATE,
+  CMD_STATS,
 } from './protocol';
 
 /** Standard BLE UUIDs that should be skipped during auto-discovery */
@@ -55,6 +65,12 @@ export interface DiscoveryResult {
   connectionType: ConnectionType;
 }
 
+/** 通知分流的可选回调（协议 v4）：波形帧与统计帧走这里，不认识的帧只计数 */
+export interface NotificationHooks {
+  onWaveform?: (frame: WaveformFrame) => void;
+  onStats?: (stats: StatsFrame) => void;
+}
+
 class BioBleMgr {
   private mgr: BleManager;
   private device: Device | null = null;
@@ -64,6 +80,13 @@ class BioBleMgr {
 
   private serviceUUID: string | null = null;
   private charUUID: string | null = null;
+
+  /** 无法识别的帧数（含旧固件 0xEC 波形帧）——诊断用，绝不静默吞咽 */
+  private rxUnknown = 0;
+  /** 识别为已知类型但结构畸形的帧数 */
+  private rxMalformed = 0;
+  /** 最近一次统计帧（链路质量快照） */
+  private lastStats: StatsFrame | null = null;
 
   /** Exposed so the UI can show which UUIDs were found */
   public discoveryInfo: DiscoveryResult | null = null;
@@ -301,9 +324,17 @@ class BioBleMgr {
     return false;
   }
 
+  /**
+   * 订阅通知并在本地按协议 v4 分流。
+   *
+   * v3 的缺陷：原实现只有 `parseBioPkt(new Uint8Array(raw))`，而 parseBioPkt
+   * 只判断 `length < 20` —— 固件在同一特征值上发的波形帧会被当成生理数据
+   * 解析（hr = 0xEC = 236）并可能入库。现在先 classifyFrame() 再分派。
+   */
   subscribeToNotifications(
     onData: (pkt: BioPkt) => void,
     onError?: (error: Error) => void,
+    hooks: NotificationHooks = {},
   ): (() => void) | null {
     if (!this.device || !this.serviceUUID || !this.charUUID) {
       const msg = `Subscribe fail: device=${!!this.device} svc=${this.serviceUUID} char=${this.charUUID}`;
@@ -327,12 +358,43 @@ class BioBleMgr {
         if (!characteristic?.value) return;
 
         const raw = Buffer.from(characteristic.value, 'base64');
+        const bytes = new Uint8Array(raw);
         if (!gotFirst) {
           gotFirst = true;
           this.log(`First data! ${raw.length} bytes: ${raw.toString('hex').substring(0, 40)}`);
         }
-        const pkt = parseBioPkt(new Uint8Array(raw));
-        if (pkt) onData(pkt);
+
+        // ★ 严格分流（协议 v4 §4）：不认识的帧一律丢弃并计数，
+        //   绝不"长度够就当成生理数据" —— v3 的 parser 正是这样被波形帧污染的。
+        const kind: FrameKind = classifyFrame(bytes);
+        switch (kind) {
+          case 'bio_pkt': {
+            const pkt = parseBioPkt(bytes);
+            if (pkt) onData(pkt);
+            else this.rxMalformed++;
+            break;
+          }
+          case 'waveform': {
+            const frame = parseWaveformFrame(bytes);
+            if (frame) hooks.onWaveform?.(frame);
+            else this.rxMalformed++;
+            break;
+          }
+          case 'stats': {
+            const st = parseStatsFrame(bytes);
+            if (st) {
+              this.lastStats = st;
+              hooks.onStats?.(st);
+            } else {
+              this.rxMalformed++;
+            }
+            break;
+          }
+          default:
+            // 含旧固件 0xEC 波形帧、未知帧：丢弃计数
+            this.rxUnknown++;
+            break;
+        }
       },
     );
 
@@ -373,6 +435,33 @@ class BioBleMgr {
   /** V3 固件：回声测试，设备收到后在串口打印 [SRV] PING ... */
   async sendPing(): Promise<void> {
     await this.writeCmd(CMD_PING);
+  }
+
+  /** V4：开启/关闭波形流（需先连接）。默认关闭以省带宽 */
+  async setStream(ecg: boolean, ppg: boolean): Promise<void> {
+    await this.writeCmd(CMD_STREAM, streamSeq(ecg, ppg));
+  }
+
+  /** V4：设置采样率组合（BIO_RATE_*，见 protocol.ts） */
+  async setRate(code: number): Promise<void> {
+    await this.writeCmd(CMD_SET_RATE, code);
+  }
+
+  /** V4：统计帧控制（0=立即一次 1=1Hz常开 2=关闭） */
+  async setStats(mode: number): Promise<void> {
+    await this.writeCmd(CMD_STATS, mode);
+  }
+
+  /** 收到但无法识别/畸形的帧计数（用于诊断与上传质量元数据） */
+  get frameRxStats(): { unknown: number; malformed: number; lastStats: StatsFrame | null } {
+    return { unknown: this.rxUnknown, malformed: this.rxMalformed, lastStats: this.lastStats };
+  }
+
+  /** 清空帧计数（开始新会话时调用） */
+  resetFrameRxStats(): void {
+    this.rxUnknown = 0;
+    this.rxMalformed = 0;
+    this.lastStats = null;
   }
 
   startHeartbeatLoop(): void {

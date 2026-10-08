@@ -18,3 +18,6 @@ ios/
 builds/
 *.log
 scripts_ci_poll.py
+
+# 协议一致性测试的临时编译产物（npm run test:proto 生成）
+.proto-test/

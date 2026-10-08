@@ -7,9 +7,15 @@
  *   Connected         → DeviceScreen (with its own internal tabs)
  *
  * Initializes SQLite database, API client and auth store on startup.
+ *
+ * `SafeAreaProvider` wraps everything: the tab bar and every screen header read
+ * their insets from it, which is what stops the system gesture bar from drawing
+ * over the bottom labels on Android edge-to-edge devices.
  */
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Device } from 'react-native-ble-plx';
 import ScanScreen from './src/screens/ScanScreen';
@@ -22,6 +28,8 @@ import TabBar from './src/components/TabBar';
 import { initDatabase } from './src/storage';
 import { bioHubAPI } from './src/api';
 import { authStore, AuthSession } from './src/auth';
+import { APP_VERSION } from './src/version';
+import { color, space, type } from './src/theme';
 
 type MainTab = 'scan' | 'cloud' | 'history' | 'settings';
 
@@ -80,24 +88,22 @@ export default function App() {
     AsyncStorage.setItem(GUEST_KEY, '1').catch(() => {});
   };
 
+  let content: React.ReactNode;
+
   if (!dbReady) {
-    return (
+    content = (
       <View style={styles.splash}>
         <Text style={styles.splashTitle}>BIO HUB</Text>
-        <Text style={styles.splashVersion}>v1.3.0</Text>
-        <ActivityIndicator color="#4A90D9" size="large" style={{ marginTop: 24 }} />
-        <Text style={styles.splashText}>初始化中...</Text>
+        <Text style={styles.splashVersion}>v{APP_VERSION}</Text>
+        <ActivityIndicator color={color.accent} size="large" style={styles.splashSpinner} />
+        <Text style={styles.splashText}>正在初始化本地数据库…</Text>
       </View>
     );
-  }
-
-  // 未登录且未选择离线模式（或访客主动去登录）→ 登录页；登录页提供「跳过登录」入口
-  if (!session && (!guestMode || showAuth)) {
-    return <AuthScreen onAuthed={handleAuthed} onSkip={enterGuestMode} />;
-  }
-
-  if (connectedDevice) {
-    return (
+  } else if (!session && (!guestMode || showAuth)) {
+    // 未登录且未选择离线模式（或访客主动去登录）→ 登录页；登录页提供「跳过登录」入口
+    content = <AuthScreen onAuthed={handleAuthed} onSkip={enterGuestMode} />;
+  } else if (connectedDevice) {
+    content = (
       <DeviceScreen
         device={connectedDevice}
         onDisconnect={() => {
@@ -107,63 +113,75 @@ export default function App() {
         autoRecord={settings?.autoRecord ?? true}
       />
     );
+  } else {
+    content = (
+      <View style={styles.container}>
+        <View style={styles.content}>
+          {activeTab === 'scan' && (
+            <ScanScreen
+              onConnected={(dev) => setConnectedDevice(dev)}
+              scanDuration={settings?.scanDuration ?? 10}
+            />
+          )}
+          {activeTab === 'cloud' && <CloudScreen onRequireLogin={() => setShowAuth(true)} />}
+          {activeTab === 'history' && <HistoryScreen />}
+          {activeTab === 'settings' && <SettingsScreen onRequireLogin={() => setShowAuth(true)} />}
+        </View>
+        <TabBar
+          tabs={[
+            { id: 'scan', label: '扫描', icon: 'bluetooth' },
+            { id: 'cloud', label: '云服务', icon: 'cloud' },
+            { id: 'history', label: '历史', icon: 'clock' },
+            { id: 'settings', label: '设置', icon: 'sliders' },
+          ]}
+          activeTab={activeTab}
+          onSelect={(id) => setActiveTab(id as MainTab)}
+        />
+      </View>
+    );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
-        {activeTab === 'scan' && (
-          <ScanScreen
-            onConnected={(dev) => setConnectedDevice(dev)}
-            scanDuration={settings?.scanDuration ?? 10}
-          />
-        )}
-        {activeTab === 'cloud' && <CloudScreen onRequireLogin={() => setShowAuth(true)} />}
-        {activeTab === 'history' && <HistoryScreen />}
-        {activeTab === 'settings' && <SettingsScreen onRequireLogin={() => setShowAuth(true)} />}
-      </View>
-      <TabBar
-        tabs={[
-          { id: 'scan', label: '扫描' },
-          { id: 'cloud', label: '云服务' },
-          { id: 'history', label: '历史' },
-          { id: 'settings', label: '设置' },
-        ]}
-        activeTab={activeTab}
-        onSelect={(id) => setActiveTab(id as MainTab)}
-      />
-    </View>
+    <SafeAreaProvider>
+      {/* Headers now extend under the status bar, so the bar's own icons must
+          be light — otherwise Android draws dark icons on the dark header. */}
+      <StatusBar style="light" />
+      {content}
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A0E1A',
+    backgroundColor: color.bg,
   },
   content: {
     flex: 1,
   },
   splash: {
     flex: 1,
-    backgroundColor: '#0A0E1A',
+    backgroundColor: color.bg,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: space.xxl,
   },
   splashTitle: {
-    fontSize: 36,
-    fontWeight: '800',
-    color: '#E0E7FF',
+    fontSize: 32,
+    lineHeight: 40,
+    fontWeight: '700',
+    color: color.text,
     letterSpacing: 4,
   },
   splashVersion: {
-    fontSize: 13,
-    color: '#4B5563',
-    marginTop: 4,
+    ...type.body,
+    color: color.textMuted,
+    marginTop: space.xs,
   },
+  splashSpinner: { marginTop: space.xxl },
   splashText: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginTop: 12,
+    ...type.body,
+    color: color.textMuted,
+    marginTop: space.md,
   },
 });

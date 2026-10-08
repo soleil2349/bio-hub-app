@@ -1,22 +1,35 @@
 /**
- * Device scan screen with BLE + SLE (NearLink) support.
- * Features: connection type badges, signal strength, improved UI.
+ * Device scan screen — BLE + SLE (NearLink) discovery.
+ *
+ * Layout notes
+ * ------------
+ *  - The header no longer hard-codes `paddingTop: 48`; it sits inside `Screen`,
+ *    which applies the real top inset. On a notched iOS device the old value
+ *    stacked on top of `SafeAreaView`'s own inset and pushed everything down.
+ *  - Device rows are overflow-safe: the name shrinks and clamps to one line
+ *    while the BLE/SLE pill stays put, so a long advertised name can no longer
+ *    push the "连接" affordance off the right edge.
+ *  - Signal strength is drawn as bars instead of the `▁▃▅▇` text glyphs, which
+ *    were rendered by the system font at a weight and baseline we did not
+ *    control and did not align with anything else on screen.
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  SafeAreaView,
-  Animated,
-} from 'react-native';
+import { Animated, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Device } from 'react-native-ble-plx';
 import { bioBleMgr } from '../ble-manager';
-import { BLE_DEVICE_NAME, SLE_DEVICE_NAME, matchDeviceName, ConnectionType } from '../protocol';
+import { SLE_DEVICE_NAME, BLE_DEVICE_NAME, matchDeviceName, type ConnectionType } from '../protocol';
+import Icon from '../components/Icon';
+import {
+  Button,
+  Card,
+  EmptyState,
+  Pill,
+  Screen,
+  ScreenHeader,
+  SegmentedControl,
+  SkeletonRow,
+} from '../components/ui';
+import { color, radius, space, tabularNums, type } from '../theme';
 
 interface Props {
   onConnected: (device: Device) => void;
@@ -25,6 +38,13 @@ interface Props {
 
 type FilterMode = 'all' | 'bio' | 'ble' | 'sle';
 
+const FILTERS = [
+  { value: 'all' as const, label: '全部' },
+  { value: 'bio' as const, label: 'BIO HUB' },
+  { value: 'ble' as const, label: 'BLE' },
+  { value: 'sle' as const, label: 'SLE' },
+];
+
 function getDeviceType(name: string | null): ConnectionType {
   if (!name) return 'unknown';
   if (name.includes(SLE_DEVICE_NAME)) return 'SLE';
@@ -32,12 +52,25 @@ function getDeviceType(name: string | null): ConnectionType {
   return 'unknown';
 }
 
-function signalIcon(rssi: number | null): string {
-  if (rssi === null) return '\u2581';
-  if (rssi > -50) return '\u2581\u2583\u2585\u2587';
-  if (rssi > -65) return '\u2581\u2583\u2585';
-  if (rssi > -80) return '\u2581\u2583';
-  return '\u2581';
+/** Four drawn bars. Level is derived from RSSI, never from a glyph string. */
+function SignalBars({ rssi }: { rssi: number | null }) {
+  const level = rssi === null ? 0 : rssi > -50 ? 4 : rssi > -65 ? 3 : rssi > -80 ? 2 : 1;
+  const tint =
+    level >= 3 ? color.success : level === 2 ? color.warning : level === 1 ? color.danger : color.neutral;
+
+  return (
+    <View style={styles.bars} accessibilityLabel={rssi === null ? '信号未知' : `信号强度 ${level} 级`}>
+      {[1, 2, 3, 4].map((i) => (
+        <View
+          key={i}
+          style={[
+            styles.bar,
+            { height: 3 + i * 3, backgroundColor: i <= level ? tint : color.border },
+          ]}
+        />
+      ))}
+    </View>
+  );
 }
 
 export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
@@ -45,6 +78,10 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
   const [scanning, setScanning] = useState(false);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterMode>('all');
+  /** Inline permission state, shown in place instead of a blocking alert. */
+  const [permissionDenied, setPermissionDenied] = useState(false);
+  /** Inline connect failure, shown in place instead of a blocking alert. */
+  const [connectError, setConnectError] = useState<string | null>(null);
   const devicesRef = useRef<Map<string, Device>>(new Map());
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
 
@@ -58,17 +95,17 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
       );
       anim.start();
       return () => anim.stop();
-    } else {
-      pulseAnim.setValue(1);
     }
+    pulseAnim.setValue(1);
   }, [scanning, pulseAnim]);
 
   const startScan = useCallback(async () => {
     const ok = await bioBleMgr.requestPermissions();
     if (!ok) {
-      Alert.alert('权限不足', '需要蓝牙和位置权限才能扫描设备');
+      setPermissionDenied(true);
       return;
     }
+    setPermissionDenied(false);
 
     await bioBleMgr.waitForPoweredOn();
 
@@ -83,10 +120,8 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
         const sorted = [...devicesRef.current.values()].sort((a, b) => {
           const aName = a.localName || a.name || '';
           const bName = b.localName || b.name || '';
-          const aMatch = matchDeviceName(aName);
-          const bMatch = matchDeviceName(bName);
-          const aScore = aMatch.isMatch ? 0 : 1;
-          const bScore = bMatch.isMatch ? 0 : 1;
+          const aScore = matchDeviceName(aName).isMatch ? 0 : 1;
+          const bScore = matchDeviceName(bName).isMatch ? 0 : 1;
           if (aScore !== bScore) return aScore - bScore;
           return (b.rssi ?? -100) - (a.rssi ?? -100);
         });
@@ -107,6 +142,7 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
   useEffect(() => {
     startScan();
     return () => bioBleMgr.stopScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startScan]);
 
   const filteredDevices = devices.filter((d) => {
@@ -123,12 +159,12 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
     bioBleMgr.stopScan();
     setScanning(false);
     setConnecting(device.id);
-
     try {
       const connected = await bioBleMgr.connect(device);
       onConnected(connected);
     } catch (err: any) {
-      Alert.alert('连接失败', err.message || '无法连接到设备');
+      console.warn('Connect failed:', err);
+      setConnectError(err?.message || '无法连接到设备，请靠近后重试');
       setConnecting(null);
     }
   };
@@ -140,327 +176,223 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
     const devType = getDeviceType(name);
 
     return (
-      <TouchableOpacity
-        style={[styles.deviceCard, match.isMatch && styles.deviceCardHighlight]}
-        onPress={() => handleConnect(item)}
-        disabled={isConnecting}
-        activeOpacity={0.7}
-      >
+      <View style={[styles.deviceCard, match.isMatch && styles.deviceCardMatch]}>
         <View style={styles.deviceInfo}>
           <View style={styles.deviceTitleRow}>
-            <Text style={[styles.deviceName, match.isMatch && styles.deviceNameHighlight]}>
+            {/* flexShrink keeps a long advertised name from pushing the pill out. */}
+            <Text
+              style={[type.h2, styles.deviceName, match.isMatch && styles.deviceNameMatch]}
+              numberOfLines={1}
+              ellipsizeMode="middle"
+            >
               {name}
             </Text>
-            {match.isMatch && (
-              <View
-                style={[
-                  styles.typeBadge,
-                  devType === 'SLE' ? styles.typeBadgeSLE : styles.typeBadgeBLE,
-                ]}
-              >
-                <Text style={styles.typeBadgeText}>
-                  {devType === 'SLE' ? 'SLE' : 'BLE'}
-                </Text>
-              </View>
-            )}
+            {match.isMatch ? (
+              <Pill label={devType === 'SLE' ? 'SLE' : 'BLE'} tone={devType === 'SLE' ? 'violet' : 'accent'} />
+            ) : null}
           </View>
-          <Text style={styles.deviceId}>{item.id}</Text>
+
+          <Text style={[styles.deviceId, tabularNums]} numberOfLines={1} ellipsizeMode="middle">
+            {item.id}
+          </Text>
+
           <View style={styles.deviceMetaRow}>
-            <Text style={styles.signalBars}>{signalIcon(item.rssi)}</Text>
-            <Text style={styles.deviceRssi}>
+            <SignalBars rssi={item.rssi} />
+            <Text style={[type.caption, styles.deviceRssi]} numberOfLines={1}>
               {item.rssi ?? '?'} dBm
             </Text>
           </View>
         </View>
-        {isConnecting ? (
-          <ActivityIndicator color="#4A90D9" />
-        ) : (
-          <View style={[styles.connectBtnBox, match.isMatch && styles.connectBtnBoxHighlight]}>
-            <Text style={[styles.connectBtn, match.isMatch && styles.connectBtnHighlight]}>
-              连接
-            </Text>
-          </View>
-        )}
-      </TouchableOpacity>
+
+        <View style={styles.deviceAction}>
+          <Button
+            label={isConnecting ? '连接中' : '连接'}
+            size="sm"
+            variant={match.isMatch ? 'primary' : 'secondary'}
+            loading={isConnecting}
+            disabled={isConnecting || connecting !== null}
+            onPress={() => handleConnect(item)}
+          />
+        </View>
+      </View>
     );
   };
 
+  const bioCount = devices.filter((d) => matchDeviceName(d.localName || d.name || '').isMatch).length;
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.headerTextRow}>
-          <Text style={styles.title}>BIO HUB</Text>
-          <Animated.View style={[styles.liveDot, scanning && { opacity: pulseAnim }]}>
-            <View style={[styles.liveDotInner, scanning ? styles.liveDotOn : styles.liveDotOff]} />
-          </Animated.View>
-        </View>
-        <Text style={styles.subtitle}>生物传感器助手 · BLE + NearLink</Text>
-      </View>
-
-      <View style={styles.filterBar}>
-        {(['all', 'bio', 'ble', 'sle'] as FilterMode[]).map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[styles.filterTab, filter === f && styles.filterTabActive]}
-            onPress={() => setFilter(f)}
-          >
-            <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
-              {f === 'all' ? '全部' : f === 'bio' ? 'BIO HUB' : f.toUpperCase()}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <View style={styles.scanBar}>
-        <Text style={styles.scanStatus}>
-          {scanning
-            ? '正在扫描附近设备...'
-            : `找到 ${filteredDevices.length} 个设备`}
-        </Text>
-        <TouchableOpacity
-          style={[styles.scanBtn, scanning && styles.scanBtnScanning]}
-          onPress={startScan}
-          disabled={scanning}
-        >
-          {scanning ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.scanBtnText}>重新扫描</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <FlatList
-        data={filteredDevices}
-        keyExtractor={(d) => d.id}
-        renderItem={renderDevice}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>{scanning ? '\u26A1' : '\u2728'}</Text>
-            <Text style={styles.emptyTitle}>
-              {scanning ? '正在搜索设备' : '未发现设备'}
-            </Text>
-            <Text style={styles.emptyText}>
-              {scanning
-                ? '正在搜索附近的 BLE 和星闪设备...'
-                : '请确保设备已开机并在附近，然后点击重新扫描'}
-            </Text>
+    <Screen>
+      <ScreenHeader
+        title="设备扫描"
+        subtitle={`BLE + 星闪 NearLink · 找到 ${devices.length} 个设备`}
+        actions={
+          <View style={styles.liveTag}>
+            <Animated.View style={{ opacity: scanning ? pulseAnim : 1 }}>
+              <View
+                style={[
+                  styles.liveDot,
+                  { backgroundColor: scanning ? color.success : color.neutral },
+                ]}
+              />
+            </Animated.View>
+            <Text style={[type.caption, styles.liveText]}>{scanning ? '扫描中' : '已停止'}</Text>
           </View>
         }
       />
-    </SafeAreaView>
+
+      <View style={styles.filterBar}>
+        <SegmentedControl options={FILTERS} value={filter} onChange={setFilter} />
+      </View>
+
+      <View style={styles.scanBar}>
+        <Text style={[type.label, styles.scanStatus]} numberOfLines={2}>
+          {scanning
+            ? '正在扫描附近设备…'
+            : `共 ${devices.length} 个设备 · 其中 ${bioCount} 个 BIO HUB`}
+        </Text>
+        <Button
+          label={scanning ? '扫描中' : '重新扫描'}
+          icon={scanning ? undefined : 'refresh'}
+          size="sm"
+          variant="primary"
+          loading={scanning}
+          disabled={scanning || connecting !== null}
+          onPress={startScan}
+        />
+      </View>
+
+      {permissionDenied ? (
+        <View style={styles.noticeWrap}>
+          <Card style={styles.notice}>
+            <View style={styles.noticeHeader}>
+              <Icon name="alert" size={17} color={color.warningText} />
+              <Text style={[type.h2, styles.noticeTitle]}>需要蓝牙与位置权限</Text>
+            </View>
+            <Text style={[type.body, styles.noticeText]}>
+              缺少权限时无法搜索附近的传感器。请到系统设置中为本应用开启蓝牙和位置权限，然后重新扫描。
+            </Text>
+            <Button label="重新扫描" icon="refresh" variant="primary" size="sm" onPress={startScan} />
+          </Card>
+        </View>
+      ) : null}
+
+      {connectError ? (
+        <View style={styles.noticeWrap}>
+          <Card style={styles.noticeError}>
+            <View style={styles.noticeHeader}>
+              <Icon name="alert" size={17} color={color.dangerText} />
+              <Text style={[type.h2, styles.noticeTitleError]}>连接失败</Text>
+              <View style={styles.spacer} />
+              <Pressable onPress={() => setConnectError(null)} hitSlop={10}>
+                <Text style={[type.label, styles.noticeDismiss]}>知道了</Text>
+              </Pressable>
+            </View>
+            <Text style={[type.body, styles.noticeTextError]}>{connectError}</Text>
+          </Card>
+        </View>
+      ) : null}
+
+      {scanning && filteredDevices.length === 0 ? (
+        <View style={styles.skeletonWrap}>
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+        </View>
+      ) : (
+        <FlatList
+          data={filteredDevices}
+          keyExtractor={(d) => d.id}
+          renderItem={renderDevice}
+          contentContainerStyle={styles.list}
+          ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
+          ListEmptyComponent={
+            <EmptyState
+              icon={scanning ? 'search' : 'bluetooth'}
+              title={scanning ? '正在搜索设备' : '未发现设备'}
+              description={
+                scanning
+                  ? '正在搜索附近的 BLE 和星闪设备，请稍候…'
+                  : '请确认传感器已开机并处于广播状态，然后点击「重新扫描」。设备的广播名通常以 BIO_HUB 开头。'
+              }
+              action={
+                scanning ? undefined : (
+                  <Button label="重新扫描" icon="refresh" variant="primary" onPress={startScan} />
+                )
+              }
+            />
+          }
+        />
+      )}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0A0E1A',
-  },
-  header: {
-    paddingTop: 48,
-    paddingBottom: 16,
-    paddingHorizontal: 20,
-    backgroundColor: '#111827',
-  },
-  headerTextRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#E0E7FF',
-    letterSpacing: 2,
-  },
-  liveDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  liveDotInner: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  liveDotOn: { backgroundColor: '#4ADE80' },
-  liveDotOff: { backgroundColor: '#6B7280' },
-  subtitle: {
-    fontSize: 13,
-    color: '#6B7280',
-    marginTop: 4,
-  },
+  liveTag: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 },
+  liveDot: { width: 8, height: 8, borderRadius: 4 },
+  liveText: { color: color.textMuted },
+
   filterBar: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#111827',
-    gap: 6,
-  },
-  filterTab: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#1F2937',
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  filterTabActive: {
-    backgroundColor: '#1E3A5F',
-    borderColor: '#2563EB',
-  },
-  filterTabText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '600',
-  },
-  filterTabTextActive: {
-    color: '#93C5FD',
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    backgroundColor: color.surface,
   },
   scanBar: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#111827',
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    backgroundColor: color.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#1F2937',
+    borderBottomColor: color.divider,
   },
-  scanStatus: {
-    color: '#9CA3AF',
-    fontSize: 13,
-  },
-  scanBtn: {
-    backgroundColor: '#4A90D9',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    minWidth: 90,
-    alignItems: 'center',
-  },
-  scanBtnScanning: {
-    backgroundColor: '#374151',
-  },
-  scanBtnText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  list: {
-    padding: 12,
-    paddingBottom: 100,
-  },
+  scanStatus: { color: color.textMuted, flex: 1, minWidth: 0, fontWeight: '400' },
+
+  list: { padding: space.md, paddingBottom: space.xxxl, flexGrow: 1 },
+  skeletonWrap: { padding: space.md },
+
   deviceCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1F2937',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
+    gap: space.md,
+    backgroundColor: color.raised,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#374151',
+    borderColor: color.border,
+    padding: space.md,
   },
-  deviceCardHighlight: {
-    borderColor: '#4A90D9',
-    backgroundColor: '#172554',
-  },
-  deviceInfo: {
-    flex: 1,
-  },
-  deviceTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  deviceName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#E5E7EB',
-  },
-  deviceNameHighlight: {
-    color: '#93C5FD',
-  },
-  typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  typeBadgeBLE: {
-    backgroundColor: '#1E3A5F',
-  },
-  typeBadgeSLE: {
-    backgroundColor: '#3B1F5E',
-  },
-  typeBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#C4B5FD',
-    letterSpacing: 0.5,
-  },
+  deviceCardMatch: { borderColor: color.accentStrong, backgroundColor: color.accentSurface },
+  deviceInfo: { flex: 1, minWidth: 0, gap: space.xs },
+  deviceTitleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  deviceName: { color: color.text, flexShrink: 1, minWidth: 0 },
+  deviceNameMatch: { color: color.accentText },
   deviceId: {
-    fontSize: 10,
-    color: '#6B7280',
-    marginTop: 3,
+    fontSize: 11,
+    lineHeight: 15,
+    color: color.textFaint,
     fontFamily: 'monospace',
   },
-  deviceMetaRow: {
+  deviceMetaRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xxs },
+  bars: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 15 },
+  bar: { width: 3, borderRadius: 1.5 },
+  deviceRssi: { color: color.textMuted },
+  deviceAction: { flexShrink: 0 },
+
+  noticeWrap: { paddingHorizontal: space.md, paddingTop: space.md },
+  notice: { borderColor: color.warningBorder },
+  noticeError: { borderColor: color.dangerBorder },
+  noticeHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 3,
+    gap: space.sm,
+    marginBottom: space.sm,
   },
-  signalBars: {
-    fontSize: 10,
-    color: '#4ADE80',
-    letterSpacing: 1,
-  },
-  deviceRssi: {
-    fontSize: 11,
-    color: '#9CA3AF',
-  },
-  connectBtnBox: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  connectBtnBoxHighlight: {
-    borderColor: '#2563EB',
-    backgroundColor: '#1E3A5F',
-  },
-  connectBtn: {
-    color: '#4A90D9',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  connectBtnHighlight: {
-    color: '#93C5FD',
-  },
-  emptyContainer: {
-    paddingTop: 80,
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  emptyIcon: {
-    fontSize: 40,
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#6B7280',
-    marginBottom: 8,
-  },
-  emptyText: {
-    color: '#4B5563',
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
+  noticeTitle: { color: color.warningText, flexShrink: 1 },
+  noticeTitleError: { color: color.dangerText, flexShrink: 1 },
+  noticeText: { color: color.textSecondary, marginBottom: space.md },
+  noticeTextError: { color: color.textSecondary },
+  noticeDismiss: { color: color.accentText, fontWeight: '600' },
+  spacer: { flex: 1 },
 });

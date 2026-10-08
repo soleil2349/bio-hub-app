@@ -1,25 +1,52 @@
 /**
  * Settings screen — app configuration, account management,
  * data management and about info.
+ *
+ * Layout notes
+ * ------------
+ *  - Every settings row places a flexible label block beside a fixed control.
+ *    The label blocks declare `flex: 1, minWidth: 0` so a long value (an email,
+ *    a server URL, "Hi3863 / WS63 Sensor Hub") wraps instead of shoving the
+ *    switch or value off the card.
+ *  - The scan-duration picker became a segmented control: four fixed-width
+ *    buttons competing with the label text for horizontal space was the one row
+ *    that could still overflow on a narrow device.
+ *  - The change-password sheet is wrapped in a KeyboardAvoidingView and respects
+ *    the bottom inset, so the save button stays reachable with the keyboard up.
+ *  - The version now comes from `app.json` via `src/version.ts` instead of the
+ *    stale hard-coded "1.3.0".
  */
 import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-  ScrollView,
-  Switch,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
   TextInput,
-  ActivityIndicator,
+  View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { clearAllData } from '../storage';
 import { bioHubAPI } from '../api';
 import { authStore, AuthUser } from '../auth';
+import { APP_BUILD, APP_VERSION } from '../version';
+import Icon from '../components/Icon';
+import {
+  Button,
+  Card,
+  Divider,
+  Pill,
+  Screen,
+  ScreenHeader,
+  SectionTitle,
+  SegmentedControl,
+} from '../components/ui';
+import { color, radius, space, tabularNums, type } from '../theme';
 
 const SETTINGS_KEY = '@biohub_settings';
 
@@ -51,9 +78,50 @@ async function saveSettings(settings: AppSettings): Promise<void> {
 
 export { loadSettings };
 
+const DURATION_OPTIONS = [5, 10, 15, 30].map((sec) => ({
+  value: String(sec),
+  label: `${sec}s`,
+}));
+
 interface Props {
   /** 访客（未登录）模式下点击「登录 / 注册」时回调，由 App 切换登录页 */
   onRequireLogin?: () => void;
+}
+
+/** One settings row: label block on the left, control on the right. */
+function SettingRow({
+  label,
+  description,
+  control,
+  onPress,
+}: {
+  label: string;
+  description?: string;
+  control?: React.ReactNode;
+  onPress?: () => void;
+}) {
+  const body = (
+    <View style={styles.settingRow}>
+      <View style={styles.settingInfo}>
+        <Text style={[type.h2, styles.settingLabel]}>{label}</Text>
+        {description ? (
+          <Text style={[type.label, styles.settingDesc]}>{description}</Text>
+        ) : null}
+      </View>
+      {control ?? (onPress ? <Icon name="chevronRight" size={18} color={color.textMuted} /> : null)}
+    </View>
+  );
+
+  if (!onPress) return body;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={({ pressed }) => [pressed && styles.rowPressed]}
+    >
+      {body}
+    </Pressable>
+  );
 }
 
 export default function SettingsScreen({ onRequireLogin }: Props) {
@@ -91,17 +159,25 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
     if (newPwd.length < 6) return setPwdError('新密码至少 6 位');
     if (newPwd !== newPwd2) return setPwdError('两次输入的新密码不一致');
     setPwdSubmitting(true);
-    const result = await bioHubAPI.changePassword(curPwd, newPwd);
-    setPwdSubmitting(false);
-    if (result.ok) {
-      setShowChangePwd(false);
-      setCurPwd('');
-      setNewPwd('');
-      setNewPwd2('');
-      Alert.alert('已更新', '密码修改成功');
-    } else {
-      setPwdError(result.error || '修改失败');
+    try {
+      const result = await bioHubAPI.changePassword(curPwd, newPwd);
+      if (result.ok) {
+        setShowChangePwd(false);
+        setCurPwd('');
+        setNewPwd('');
+        setNewPwd2('');
+        Alert.alert('已更新', '密码修改成功');
+      } else {
+        setPwdError(result.error || '修改失败');
+      }
+    } finally {
+      setPwdSubmitting(false);
     }
+  };
+
+  const closePwdModal = () => {
+    setShowChangePwd(false);
+    setPwdError(null);
   };
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -137,413 +213,349 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
     ]);
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>设置</Text>
-        <Text style={styles.subtitle}>应用配置与数据管理</Text>
-      </View>
+  const serverUrl = bioHubAPI.isConfigured() ? bioHubAPI.getConfig().baseUrl : '未配置';
 
-      <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+  return (
+    <Screen>
+      <ScreenHeader title="设置" subtitle="应用配置与数据管理" />
+
+      <ScrollView contentContainerStyle={styles.body}>
         {/* Account */}
-        <Text style={styles.sectionTitle}>账户</Text>
-        <View style={styles.card}>
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>
-                {user?.displayName || user?.email || '未登录（离线模式）'}
-              </Text>
-              {user?.displayName && (
-                <Text style={styles.settingDesc}>{user.email}</Text>
-              )}
-              {user?.isAdmin && (
-                <Text style={[styles.settingDesc, { color: '#A78BFA' }]}>管理员</Text>
-              )}
-            </View>
-          </View>
+        <SectionTitle first>账户</SectionTitle>
+        <Card padded={false}>
           {user ? (
             <>
-              <View style={styles.divider} />
-              <TouchableOpacity
-                style={styles.settingRow}
-                onPress={() => setShowChangePwd(true)}
+              <View style={styles.accountRow}>
+                <View style={styles.avatar}>
+                  <Icon name="user" size={20} color={color.accentText} />
+                </View>
+                <View style={styles.settingInfo}>
+                  <Text style={[type.h2, styles.settingLabel]} numberOfLines={1}>
+                    {user.displayName || user.email}
+                  </Text>
+                  {user.displayName ? (
+                    <Text style={[type.label, styles.settingDesc]} numberOfLines={1}>
+                      {user.email}
+                    </Text>
+                  ) : null}
+                  {user.isAdmin ? (
+                    <View style={styles.adminTag}>
+                      <Pill label="管理员" tone="violet" />
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+              <Divider />
+              <SettingRow label="修改密码" description="更改登录密码" onPress={() => setShowChangePwd(true)} />
+              <Divider />
+              <Pressable
+                onPress={handleLogout}
+                style={({ pressed }) => [styles.settingRow, pressed && styles.rowPressed]}
+                accessibilityRole="button"
               >
                 <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>修改密码</Text>
-                  <Text style={styles.settingDesc}>更改登录密码</Text>
+                  <Text style={[type.h2, styles.dangerLabel]}>退出登录</Text>
+                  <Text style={[type.label, styles.dangerDesc]}>
+                    退出后需要重新登录才能查看云端数据
+                  </Text>
                 </View>
-                <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
-              </TouchableOpacity>
-              <View style={styles.divider} />
-              <TouchableOpacity style={styles.dangerRow} onPress={handleLogout}>
-                <Text style={styles.dangerLabel}>退出登录</Text>
-                <Text style={styles.dangerDesc}>退出后需要重新登录才能查看数据</Text>
-              </TouchableOpacity>
+                <Icon name="logout" size={18} color={color.dangerText} />
+              </Pressable>
             </>
           ) : (
-            <>
-              <View style={styles.divider} />
-              <TouchableOpacity style={styles.settingRow} onPress={onRequireLogin}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>登录 / 注册</Text>
-                  <Text style={styles.settingDesc}>
-                    登录后可上传数据到云端并查看分析报告
-                  </Text>
-                </View>
-                <Text style={{ color: '#6B7280', fontSize: 16 }}>{'\u203A'}</Text>
-              </TouchableOpacity>
-            </>
+            <SettingRow
+              label="登录 / 注册"
+              description="登录后可上传数据到云端并查看分析报告"
+              onPress={onRequireLogin}
+            />
           )}
-        </View>
+        </Card>
 
-        {/* Recording Settings */}
-        <Text style={styles.sectionTitle}>数据记录</Text>
-        <View style={styles.card}>
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>自动记录</Text>
-              <Text style={styles.settingDesc}>
-                连接设备后自动开始记录传感器数据
-              </Text>
-            </View>
-            <Switch
-              value={settings.autoRecord}
-              onValueChange={(v) => updateSetting('autoRecord', v)}
-              trackColor={{ false: '#374151', true: '#1D4ED8' }}
-              thumbColor={settings.autoRecord ? '#60A5FA' : '#9CA3AF'}
-            />
-          </View>
+        {/* Recording */}
+        <SectionTitle>数据记录</SectionTitle>
+        <Card padded={false}>
+          <SettingRow
+            label="自动记录"
+            description="连接设备后自动开始记录传感器数据"
+            control={
+              <Switch
+                value={settings.autoRecord}
+                onValueChange={(v) => updateSetting('autoRecord', v)}
+                trackColor={{ false: color.borderStrong, true: color.accentStrong }}
+                thumbColor={settings.autoRecord ? color.accentText : color.textMuted}
+                accessibilityLabel="自动记录"
+              />
+            }
+          />
+          <Divider />
+          <SettingRow
+            label="连接时显示调试面板"
+            description="连接设备后默认显示 BLE 调试日志"
+            control={
+              <Switch
+                value={settings.showDebugOnConnect}
+                onValueChange={(v) => updateSetting('showDebugOnConnect', v)}
+                trackColor={{ false: color.borderStrong, true: color.accentStrong }}
+                thumbColor={settings.showDebugOnConnect ? color.accentText : color.textMuted}
+                accessibilityLabel="连接时显示调试面板"
+              />
+            }
+          />
+        </Card>
 
-          <View style={styles.divider} />
-
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>连接时显示调试面板</Text>
-              <Text style={styles.settingDesc}>
-                连接设备后默认显示BLE调试日志
-              </Text>
-            </View>
-            <Switch
-              value={settings.showDebugOnConnect}
-              onValueChange={(v) => updateSetting('showDebugOnConnect', v)}
-              trackColor={{ false: '#374151', true: '#1D4ED8' }}
-              thumbColor={settings.showDebugOnConnect ? '#60A5FA' : '#9CA3AF'}
-            />
-          </View>
-        </View>
-
-        {/* Connection Settings */}
-        <Text style={styles.sectionTitle}>连接设置</Text>
-        <View style={styles.card}>
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>优先星闪 (SLE)</Text>
-              <Text style={styles.settingDesc}>
-                扫描时优先匹配星闪(SparkLink)设备
-              </Text>
-            </View>
-            <Switch
-              value={settings.preferSLE}
-              onValueChange={(v) => updateSetting('preferSLE', v)}
-              trackColor={{ false: '#374151', true: '#7C3AED' }}
-              thumbColor={settings.preferSLE ? '#A78BFA' : '#9CA3AF'}
-            />
-          </View>
-
-          <View style={styles.divider} />
-
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>扫描时长</Text>
-              <Text style={styles.settingDesc}>
-                自动扫描持续时间
-              </Text>
-            </View>
+        {/* Connection */}
+        <SectionTitle>连接设置</SectionTitle>
+        <Card padded={false}>
+          <SettingRow
+            label="优先星闪 (SLE)"
+            description="扫描时优先匹配星闪 SparkLink 设备"
+            control={
+              <Switch
+                value={settings.preferSLE}
+                onValueChange={(v) => updateSetting('preferSLE', v)}
+                trackColor={{ false: color.borderStrong, true: color.violetBorder }}
+                thumbColor={settings.preferSLE ? color.violet : color.textMuted}
+                accessibilityLabel="优先星闪"
+              />
+            }
+          />
+          <Divider />
+          <View style={styles.blockRow}>
+            <Text style={[type.h2, styles.settingLabel]}>扫描时长</Text>
+            <Text style={[type.label, styles.settingDesc]}>单次自动扫描的持续时间</Text>
             <View style={styles.durationPicker}>
-              {[5, 10, 15, 30].map((sec) => (
-                <TouchableOpacity
-                  key={sec}
-                  style={[
-                    styles.durationBtn,
-                    settings.scanDuration === sec && styles.durationBtnActive,
-                  ]}
-                  onPress={() => updateSetting('scanDuration', sec)}
-                >
-                  <Text
-                    style={[
-                      styles.durationBtnText,
-                      settings.scanDuration === sec && styles.durationBtnTextActive,
-                    ]}
-                  >
-                    {sec}s
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              <SegmentedControl
+                options={DURATION_OPTIONS}
+                value={String(settings.scanDuration)}
+                onChange={(v) => updateSetting('scanDuration', Number(v))}
+              />
             </View>
           </View>
-        </View>
+        </Card>
 
-        {/* Server info (read-only summary) */}
-        <Text style={styles.sectionTitle}>云服务</Text>
-        <View style={styles.card}>
+        {/* Server */}
+        <SectionTitle>云服务</SectionTitle>
+        <Card padded={false}>
           <View style={styles.settingRow}>
             <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>服务器地址</Text>
-              <Text style={styles.settingDesc}>
-                {bioHubAPI.isConfigured()
-                  ? bioHubAPI.getConfig().baseUrl
-                  : '未配置'}
-              </Text>
-              <Text style={[styles.settingDesc, { marginTop: 2 }]}>
-                在「云服务」页面可以修改
-              </Text>
+              <Text style={[type.h2, styles.settingLabel]}>服务器地址</Text>
+              <Text style={[type.label, styles.settingDesc]}>{serverUrl}</Text>
+              <Text style={[type.caption, styles.settingHint]}>可在「云服务」页面修改</Text>
             </View>
           </View>
-        </View>
+        </Card>
 
-        {/* Data Management */}
-        <Text style={styles.sectionTitle}>数据管理</Text>
-        <View style={styles.card}>
-          <TouchableOpacity style={styles.dangerRow} onPress={handleClearData}>
-            <Text style={styles.dangerLabel}>清除所有数据</Text>
-            <Text style={styles.dangerDesc}>删除所有历史记录和传感器数据</Text>
-          </TouchableOpacity>
-          <View style={styles.divider} />
-          <TouchableOpacity style={styles.settingRow} onPress={handleResetSettings}>
-            <Text style={styles.resetLabel}>重置设置</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Data management */}
+        <SectionTitle>数据管理</SectionTitle>
+        <Card padded={false}>
+          <Pressable
+            onPress={handleClearData}
+            style={({ pressed }) => [styles.settingRow, pressed && styles.rowPressed]}
+            accessibilityRole="button"
+          >
+            <View style={styles.settingInfo}>
+              <Text style={[type.h2, styles.dangerLabel]}>清除所有数据</Text>
+              <Text style={[type.label, styles.dangerDesc]}>
+                删除所有历史记录和传感器数据
+              </Text>
+            </View>
+            <Icon name="trash" size={18} color={color.dangerText} />
+          </Pressable>
+          <Divider />
+          <SettingRow label="重置设置" description="恢复所有配置为默认值" onPress={handleResetSettings} />
+        </Card>
 
         {/* About */}
-        <Text style={styles.sectionTitle}>关于</Text>
-        <View style={styles.card}>
+        <SectionTitle>关于</SectionTitle>
+        <Card padded={false}>
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>应用名称</Text>
-            <Text style={styles.aboutValue}>BIO HUB</Text>
+            <Text style={[type.body, styles.aboutLabel]}>应用名称</Text>
+            <Text style={[type.body, styles.aboutValue]} numberOfLines={2}>
+              BIO HUB
+            </Text>
           </View>
-          <View style={styles.divider} />
+          <Divider />
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>版本</Text>
-            <Text style={styles.aboutValue}>1.3.0</Text>
+            <Text style={[type.body, styles.aboutLabel]}>版本</Text>
+            <Text style={[type.body, styles.aboutValue, tabularNums]} numberOfLines={2}>
+              {APP_VERSION} ({APP_BUILD})
+            </Text>
           </View>
-          <View style={styles.divider} />
+          <Divider />
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>平台</Text>
-            <Text style={styles.aboutValue}>Expo SDK 57 / React Native</Text>
+            <Text style={[type.body, styles.aboutLabel]}>运行环境</Text>
+            <Text style={[type.body, styles.aboutValue]} numberOfLines={2}>
+              Expo SDK 57 / React Native
+            </Text>
           </View>
-          <View style={styles.divider} />
+          <Divider />
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>通信协议</Text>
-            <Text style={styles.aboutValue}>BLE + SLE (NearLink)</Text>
+            <Text style={[type.body, styles.aboutLabel]}>通信协议</Text>
+            <Text style={[type.body, styles.aboutValue]} numberOfLines={2}>
+              BLE + SLE (NearLink)
+            </Text>
           </View>
-          <View style={styles.divider} />
+          <Divider />
           <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>硬件平台</Text>
-            <Text style={styles.aboutValue}>Hi3863 / WS63 Sensor Hub</Text>
+            <Text style={[type.body, styles.aboutLabel]}>硬件平台</Text>
+            <Text style={[type.body, styles.aboutValue]} numberOfLines={2}>
+              Hi3863 / WS63 Sensor Hub
+            </Text>
           </View>
-        </View>
+        </Card>
 
         <Text style={styles.footer}>
-          BIO HUB Sensor App{'\n'}
-          蓝牙/星闪 生物传感器数据采集与分析
+          {'BIO HUB Sensor App\n蓝牙 / 星闪 生物传感器数据采集与分析'}
         </Text>
       </ScrollView>
 
-      {/* Change password modal */}
-      <Modal visible={showChangePwd} animationType="slide" transparent>
-        <View style={styles.pwdOverlay}>
-          <View style={styles.pwdPanel}>
-            <Text style={styles.pwdTitle}>修改密码</Text>
+      {/* Change-password sheet */}
+      <Modal
+        visible={showChangePwd}
+        animationType="slide"
+        transparent
+        onRequestClose={closePwdModal}
+      >
+        <KeyboardAvoidingView
+          style={styles.sheetOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView contentContainerStyle={styles.sheetScroll} keyboardShouldPersistTaps="handled">
+            <Card style={styles.sheetPanel}>
+              <Text style={[type.h1, styles.sheetTitle]}>修改密码</Text>
 
-            <Text style={styles.pwdLabel}>当前密码</Text>
-            <TextInput
-              style={styles.pwdInput}
-              value={curPwd}
-              onChangeText={setCurPwd}
-              placeholder="输入当前密码"
-              placeholderTextColor="#4B5563"
-              secureTextEntry
-              autoCapitalize="none"
-            />
+              <Text style={[type.label, styles.inputLabel]}>当前密码</Text>
+              <TextInput
+                style={[type.body, styles.input]}
+                value={curPwd}
+                onChangeText={setCurPwd}
+                placeholder="输入当前密码"
+                placeholderTextColor={color.textFaint}
+                secureTextEntry
+                autoCapitalize="none"
+                accessibilityLabel="当前密码"
+              />
 
-            <Text style={styles.pwdLabel}>新密码</Text>
-            <TextInput
-              style={styles.pwdInput}
-              value={newPwd}
-              onChangeText={setNewPwd}
-              placeholder="至少 6 位"
-              placeholderTextColor="#4B5563"
-              secureTextEntry
-              autoCapitalize="none"
-            />
+              <Text style={[type.label, styles.inputLabel]}>新密码</Text>
+              <TextInput
+                style={[type.body, styles.input]}
+                value={newPwd}
+                onChangeText={setNewPwd}
+                placeholder="至少 6 位"
+                placeholderTextColor={color.textFaint}
+                secureTextEntry
+                autoCapitalize="none"
+                accessibilityLabel="新密码"
+              />
 
-            <Text style={styles.pwdLabel}>确认新密码</Text>
-            <TextInput
-              style={styles.pwdInput}
-              value={newPwd2}
-              onChangeText={setNewPwd2}
-              placeholder="再次输入新密码"
-              placeholderTextColor="#4B5563"
-              secureTextEntry
-              autoCapitalize="none"
-            />
+              <Text style={[type.label, styles.inputLabel]}>确认新密码</Text>
+              <TextInput
+                style={[type.body, styles.input]}
+                value={newPwd2}
+                onChangeText={setNewPwd2}
+                placeholder="再次输入新密码"
+                placeholderTextColor={color.textFaint}
+                secureTextEntry
+                autoCapitalize="none"
+                accessibilityLabel="确认新密码"
+              />
 
-            {pwdError && <Text style={styles.pwdError}>{pwdError}</Text>}
+              {pwdError ? <Text style={[type.label, styles.pwdError]}>{pwdError}</Text> : null}
 
-            <View style={styles.pwdActions}>
-              <TouchableOpacity
-                style={[styles.pwdBtn, styles.pwdBtnSecondary]}
-                onPress={() => {
-                  setShowChangePwd(false);
-                  setPwdError(null);
-                }}
-                disabled={pwdSubmitting}
-              >
-                <Text style={styles.pwdBtnSecondaryText}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.pwdBtn, styles.pwdBtnPrimary]}
-                onPress={submitChangePwd}
-                disabled={pwdSubmitting}
-              >
-                {pwdSubmitting ? (
-                  <ActivityIndicator color="#E0E7FF" />
-                ) : (
-                  <Text style={styles.pwdBtnPrimaryText}>保存</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
+              <View style={styles.sheetActions}>
+                <Button
+                  label="取消"
+                  variant="secondary"
+                  disabled={pwdSubmitting}
+                  style={styles.sheetBtn}
+                  onPress={closePwdModal}
+                />
+                <Button
+                  label="保存"
+                  variant="primary"
+                  loading={pwdSubmitting}
+                  style={styles.sheetBtn}
+                  onPress={submitChangePwd}
+                />
+              </View>
+            </Card>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0E1A' },
-  header: {
-    paddingTop: 48,
-    paddingBottom: 16,
-    paddingHorizontal: 20,
-    backgroundColor: '#111827',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1F2937',
-  },
-  title: { fontSize: 24, fontWeight: '800', color: '#E0E7FF' },
-  subtitle: { fontSize: 13, color: '#6B7280', marginTop: 4 },
-  body: { flex: 1 },
-  bodyContent: { padding: 16, paddingBottom: 120 },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#6B7280',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginTop: 20,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  card: {
-    backgroundColor: '#1F2937',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#374151',
-    overflow: 'hidden',
-  },
+  body: { padding: space.lg, paddingBottom: space.huge },
+
   settingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 14,
+    gap: space.md,
+    padding: space.lg,
   },
-  settingInfo: { flex: 1, marginRight: 12 },
-  settingLabel: { fontSize: 15, fontWeight: '600', color: '#E5E7EB' },
-  settingDesc: { fontSize: 12, color: '#6B7280', marginTop: 2, lineHeight: 18 },
-  divider: { height: 1, backgroundColor: '#374151', marginHorizontal: 14 },
-  durationPicker: { flexDirection: 'row', gap: 6 },
-  durationBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#374151',
+  rowPressed: { backgroundColor: color.subtle },
+  settingInfo: { flex: 1, minWidth: 0 },
+  settingLabel: { color: color.text },
+  settingDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 17 },
+  settingHint: { color: color.textFaint, marginTop: space.xxs },
+
+  accountRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, padding: space.lg },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
+    backgroundColor: color.accentSurface,
+    borderWidth: 1,
+    borderColor: color.accentBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
-  durationBtnActive: { backgroundColor: '#1D4ED8' },
-  durationBtnText: { fontSize: 12, color: '#9CA3AF', fontWeight: '600' },
-  durationBtnTextActive: { color: '#E0E7FF' },
-  dangerRow: { padding: 14 },
-  dangerLabel: { fontSize: 15, fontWeight: '600', color: '#FCA5A5' },
-  dangerDesc: { fontSize: 12, color: '#F87171', marginTop: 2 },
-  resetLabel: { fontSize: 15, fontWeight: '600', color: '#93C5FD' },
+  adminTag: { marginTop: space.sm, flexDirection: 'row' },
+
+  blockRow: { padding: space.lg, gap: space.xxs },
+  durationPicker: { marginTop: space.md },
+
+  dangerLabel: { color: color.dangerText },
+  dangerDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 17 },
+
   aboutRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 14,
+    gap: space.lg,
+    padding: space.lg,
   },
-  aboutLabel: { fontSize: 14, color: '#9CA3AF' },
-  aboutValue: { fontSize: 14, color: '#E5E7EB', fontWeight: '500' },
+  aboutLabel: { color: color.textMuted, flexShrink: 0 },
+  aboutValue: { color: color.text, fontWeight: '600', flexShrink: 1, minWidth: 0, textAlign: 'right' },
+
   footer: {
+    ...type.caption,
+    color: color.textFaint,
     textAlign: 'center',
-    color: '#4B5563',
-    fontSize: 12,
-    marginTop: 32,
-    lineHeight: 20,
+    marginTop: space.xxl,
+    lineHeight: 18,
   },
-  pwdOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  pwdPanel: {
-    backgroundColor: '#111827',
-    borderRadius: 14,
-    borderColor: '#1F2937',
+
+  /* Sheets */
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)' },
+  sheetScroll: { flexGrow: 1, justifyContent: 'center', padding: space.xl },
+  sheetPanel: { gap: space.sm, padding: space.xl },
+  sheetTitle: { color: color.text, marginBottom: space.xs },
+  inputLabel: { color: color.textSecondary, marginTop: space.sm },
+  input: {
+    backgroundColor: color.sunken,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    padding: 20,
+    borderColor: color.borderStrong,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    color: color.text,
+    minHeight: 48,
   },
-  pwdTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#E0E7FF',
-    marginBottom: 12,
-  },
-  pwdLabel: {
-    color: '#9CA3AF',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 10,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  pwdInput: {
-    backgroundColor: '#1F2937',
-    borderRadius: 8,
-    borderColor: '#374151',
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#E5E7EB',
-    fontSize: 14,
-  },
-  pwdError: { color: '#F87171', marginTop: 12, fontSize: 13, textAlign: 'center' },
-  pwdActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 16,
-    justifyContent: 'flex-end',
-  },
-  pwdBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 90,
-    alignItems: 'center',
-  },
-  pwdBtnSecondary: { backgroundColor: '#1F2937' },
-  pwdBtnSecondaryText: { color: '#93C5FD', fontWeight: '600' },
-  pwdBtnPrimary: { backgroundColor: '#1D4ED8' },
-  pwdBtnPrimaryText: { color: '#E0E7FF', fontWeight: '700' },
+  pwdError: { color: color.dangerText, marginTop: space.sm, fontWeight: '400' },
+  sheetActions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
+  sheetBtn: { flex: 1 },
 });

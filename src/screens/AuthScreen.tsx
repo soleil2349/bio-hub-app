@@ -1,26 +1,51 @@
 /**
  * Authentication screen: login + register, with an inline server-URL editor.
  *
- * Shown by ``App.tsx`` whenever the user is not authenticated. On success
- * the auth store is populated via ``bioHubAPI`` and the parent re-renders
+ * Shown by `App.tsx` whenever the user is not authenticated. On success
+ * the auth store is populated via `bioHubAPI` and the parent re-renders
  * into the main app.
+ *
+ * Layout notes
+ * ------------
+ *  - The form sits inside `Screen` (real top/bottom insets) and a
+ *    `KeyboardAvoidingView`, so the submit button is reachable with the
+ *    keyboard open instead of being covered by it.
+ *  - Hero padding is capped: the old `paddingTop: 64` combined with a notched
+ *    device's safe-area inset pushed the form far enough down that the primary
+ *    action fell below the fold on shorter phones.
+ *  - Labels sit above their inputs (never placeholder-as-label), and the
+ *    placeholder colour was raised from #4B5563 — which measured 1.9:1 on this
+ *    background and was effectively unreadable — to a legible muted tone.
  */
 import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
-  ActivityIndicator,
-  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { bioHubAPI } from '../api';
+import Icon from '../components/Icon';
+import {
+  Button,
+  Card,
+  ErrorNote,
+  Screen,
+  SegmentedControl,
+  StatusDot,
+} from '../components/ui';
+import { color, radius, space, type } from '../theme';
 
 type Mode = 'login' | 'register';
+
+const MODE_OPTIONS = [
+  { value: 'login' as const, label: '登录' },
+  { value: 'register' as const, label: '注册' },
+];
 
 interface Props {
   onAuthed: () => void;
@@ -51,9 +76,12 @@ export default function AuthScreen({ onAuthed, onSkip }: Props) {
 
   const pingServer = async () => {
     setChecking(true);
-    const status = await bioHubAPI.checkServer();
-    setServerOk(status.online);
-    setChecking(false);
+    try {
+      const status = await bioHubAPI.checkServer();
+      setServerOk(status.online);
+    } finally {
+      setChecking(false);
+    }
   };
 
   const saveServerUrl = async () => {
@@ -101,313 +129,271 @@ export default function AuthScreen({ onAuthed, onSkip }: Props) {
     }
   };
 
-  const switchMode = () => {
+  const switchMode = (next: Mode) => {
     setError(null);
-    setMode((m) => (m === 'login' ? 'register' : 'login'));
+    setMode(next);
   };
 
+  const serverTone = checking ? 'warn' : serverOk === true ? 'ok' : serverOk === false ? 'bad' : 'idle';
+  const serverLabel = checking
+    ? '正在测试服务器…'
+    : serverOk === true
+    ? '服务器可用'
+    : serverOk === false
+    ? '服务器不可用'
+    : '未测试';
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
+    <Screen edges={['top', 'bottom', 'left', 'right']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.branding}>
-          <Text style={styles.brandTitle}>BIO HUB</Text>
-          <Text style={styles.brandSubtitle}>生物传感器数据采集与分析</Text>
-        </View>
-
-        {/* Server status */}
-        <TouchableOpacity
-          style={styles.serverBar}
-          onPress={() => setShowServerEdit((v) => !v)}
-          activeOpacity={0.7}
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <View
-            style={[
-              styles.serverDot,
-              {
-                backgroundColor: checking
-                  ? '#FBBF24'
-                  : serverOk === true
-                  ? '#4ADE80'
-                  : serverOk === false
-                  ? '#EF4444'
-                  : '#6B7280',
-              },
-            ]}
-          />
-          <Text style={styles.serverText} numberOfLines={1}>
-            {checking
-              ? '正在测试服务器...'
-              : serverOk === true
-              ? `服务器可用 · ${serverUrl}`
-              : serverOk === false
-              ? `服务器不可用 · ${serverUrl}`
-              : serverUrl || '未配置服务器'}
-          </Text>
-          <Text style={styles.serverAction}>{showServerEdit ? '收起' : '修改'}</Text>
-        </TouchableOpacity>
+          <View style={styles.branding}>
+            <Text style={styles.brandTitle}>BIO HUB</Text>
+            <Text style={[type.body, styles.brandSubtitle]}>生物传感器数据采集与分析</Text>
+          </View>
 
-        {showServerEdit && (
-          <View style={styles.serverEditor}>
+          {/* Server status */}
+          <Pressable
+            style={({ pressed }) => [styles.serverBar, pressed && styles.serverBarPressed]}
+            onPress={() => setShowServerEdit((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={`服务器状态：${serverLabel}，点击修改地址`}
+          >
+            <StatusDot tone={serverTone} />
+            <View style={styles.serverTextWrap}>
+              <Text style={[type.label, styles.serverLabel]} numberOfLines={1}>
+                {serverLabel}
+              </Text>
+              <Text style={[type.caption, styles.serverUrl]} numberOfLines={1} ellipsizeMode="middle">
+                {serverUrl || '未配置服务器地址'}
+              </Text>
+            </View>
+            <Text style={[type.label, styles.serverAction]}>
+              {showServerEdit ? '收起' : '修改'}
+            </Text>
+          </Pressable>
+
+          {showServerEdit ? (
+            <Card style={styles.serverEditor}>
+              <Text style={[type.label, styles.inputLabel]}>服务器地址</Text>
+              <TextInput
+                style={[type.body, styles.input]}
+                value={serverUrl}
+                onChangeText={setServerUrl}
+                placeholder="http://156.226.176.22"
+                placeholderTextColor={color.textFaint}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                accessibilityLabel="服务器地址"
+              />
+              <View style={styles.serverEditActions}>
+                <Button
+                  label="测试"
+                  variant="secondary"
+                  size="sm"
+                  loading={checking}
+                  style={styles.serverEditBtn}
+                  onPress={pingServer}
+                />
+                <Button
+                  label="保存"
+                  variant="primary"
+                  size="sm"
+                  style={styles.serverEditBtn}
+                  onPress={saveServerUrl}
+                />
+              </View>
+            </Card>
+          ) : null}
+
+          {/* Mode switch */}
+          <View style={styles.modeSwitch}>
+            <SegmentedControl options={MODE_OPTIONS} value={mode} onChange={switchMode} />
+          </View>
+
+          {/* Form */}
+          <View style={styles.form}>
+            <Text style={[type.label, styles.inputLabel]}>邮箱</Text>
             <TextInput
-              style={styles.input}
-              value={serverUrl}
-              onChangeText={setServerUrl}
-              placeholder="http://156.226.176.22"
-              placeholderTextColor="#4B5563"
+              style={[type.body, styles.input]}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              placeholderTextColor={color.textFaint}
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="url"
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              accessibilityLabel="邮箱"
             />
-            <View style={styles.serverEditActions}>
-              <TouchableOpacity style={styles.smallBtnSecondary} onPress={pingServer}>
-                <Text style={styles.smallBtnSecondaryText}>测试</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.smallBtnPrimary} onPress={saveServerUrl}>
-                <Text style={styles.smallBtnPrimaryText}>保存</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
 
-        {/* Mode switch */}
-        <View style={styles.modeSwitch}>
-          <TouchableOpacity
-            style={[styles.modeBtn, mode === 'login' && styles.modeBtnActive]}
-            onPress={() => mode !== 'login' && switchMode()}
-          >
-            <Text style={[styles.modeBtnText, mode === 'login' && styles.modeBtnTextActive]}>
-              登录
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modeBtn, mode === 'register' && styles.modeBtnActive]}
-            onPress={() => mode !== 'register' && switchMode()}
-          >
-            <Text style={[styles.modeBtnText, mode === 'register' && styles.modeBtnTextActive]}>
-              注册
-            </Text>
-          </TouchableOpacity>
-        </View>
+            <Text style={[type.label, styles.inputLabel]}>密码</Text>
+            <TextInput
+              style={[type.body, styles.input]}
+              value={password}
+              onChangeText={setPassword}
+              placeholder={mode === 'register' ? '至少 6 位' : '输入密码'}
+              placeholderTextColor={color.textFaint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+              textContentType={mode === 'login' ? 'password' : 'newPassword'}
+              accessibilityLabel="密码"
+            />
 
-        {/* Form */}
-        <View style={styles.form}>
-          <Text style={styles.label}>邮箱</Text>
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            placeholderTextColor="#4B5563"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            textContentType="emailAddress"
-          />
+            {mode === 'register' ? (
+              <>
+                <Text style={[type.label, styles.inputLabel]}>昵称（可选）</Text>
+                <TextInput
+                  style={[type.body, styles.input]}
+                  value={displayName}
+                  onChangeText={setDisplayName}
+                  placeholder="用于在账户中显示"
+                  placeholderTextColor={color.textFaint}
+                  autoCorrect={false}
+                  maxLength={32}
+                  accessibilityLabel="昵称"
+                />
+              </>
+            ) : null}
 
-          <Text style={styles.label}>密码</Text>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder={mode === 'register' ? '至少 6 位' : '输入密码'}
-            placeholderTextColor="#4B5563"
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-            textContentType={mode === 'login' ? 'password' : 'newPassword'}
-          />
+            {error ? (
+              <View style={styles.errorWrap}>
+                <ErrorNote message={error} />
+              </View>
+            ) : null}
 
-          {mode === 'register' && (
-            <>
-              <Text style={styles.label}>昵称（可选）</Text>
-              <TextInput
-                style={styles.input}
-                value={displayName}
-                onChangeText={setDisplayName}
-                placeholder="用于显示"
-                placeholderTextColor="#4B5563"
-                autoCorrect={false}
-                maxLength={32}
-              />
-            </>
-          )}
+            <Button
+              label={mode === 'login' ? '登录' : '注册并登录'}
+              variant="primary"
+              block
+              loading={submitting}
+              style={styles.submit}
+              onPress={handleSubmit}
+            />
 
-          {error && <Text style={styles.errorText}>{error}</Text>}
-
-          <TouchableOpacity
-            style={[styles.primaryBtn, submitting && styles.primaryBtnDisabled]}
-            onPress={handleSubmit}
-            disabled={submitting}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#E0E7FF" />
-            ) : (
-              <Text style={styles.primaryBtnText}>
-                {mode === 'login' ? '登录' : '注册并登录'}
+            <Pressable
+              onPress={() => switchMode(mode === 'login' ? 'register' : 'login')}
+              style={styles.switchLink}
+              hitSlop={8}
+            >
+              <Text style={[type.label, styles.switchLinkText]}>
+                {mode === 'login' ? '还没有账户？点此注册' : '已有账户？点此登录'}
               </Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={switchMode} style={styles.switchLink}>
-            <Text style={styles.switchLinkText}>
-              {mode === 'login' ? '还没有账户？点此注册' : '已有账户？点此登录'}
-            </Text>
-          </TouchableOpacity>
+            </Pressable>
+          </View>
 
           {/* 离线模式入口：无网络 / 服务器不可用时也能使用蓝牙采集与本地分析 */}
-          {onSkip && (
-            <TouchableOpacity onPress={onSkip} style={styles.skipBtn} activeOpacity={0.7}>
-              <Text style={styles.skipBtnText}>跳过登录，离线使用</Text>
-              <Text style={styles.skipBtnHint}>
-                蓝牙采集与本地分析无需登录，随时可在「设置」中登录
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
+          {onSkip ? (
+            <Pressable
+              onPress={onSkip}
+              style={({ pressed }) => [styles.skipBtn, pressed && styles.skipBtnPressed]}
+              accessibilityRole="button"
+            >
+              <Icon name="bluetooth" size={16} color={color.accentText} />
+              <Text style={[type.label, styles.skipBtnText]}>跳过登录，离线使用</Text>
+            </Pressable>
+          ) : null}
 
-        <Text style={styles.footer}>
-          注册即表示同意在此服务器上存储你的采集数据{'\n'}
-          仅登录后的用户可访问自己的历史与报告
-        </Text>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          <Text style={[type.caption, styles.footer]}>
+            {'注册即表示同意在此服务器上存储你的采集数据。\n仅登录后的用户可访问自己的历史与报告。'}
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0E1A' },
-  scroll: { padding: 24, paddingTop: 64, paddingBottom: 48 },
-  branding: { alignItems: 'center', marginBottom: 24 },
+  flex: { flex: 1 },
+  scroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: space.xxl,
+    paddingTop: space.xxxl,
+    paddingBottom: space.xxxl,
+  },
+
+  branding: { alignItems: 'center', marginBottom: space.xxl },
   brandTitle: {
-    fontSize: 36,
-    fontWeight: '800',
-    color: '#E0E7FF',
+    fontSize: 30,
+    lineHeight: 38,
+    fontWeight: '700',
+    color: color.text,
     letterSpacing: 4,
   },
-  brandSubtitle: { fontSize: 13, color: '#6B7280', marginTop: 4 },
+  brandSubtitle: { color: color.textMuted, marginTop: space.xs, textAlign: 'center' },
+
   serverBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#111827',
-    borderColor: '#1F2937',
+    gap: space.md,
+    backgroundColor: color.surface,
+    borderColor: color.border,
     borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 8,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    marginBottom: space.md,
   },
-  serverDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-  serverText: { flex: 1, color: '#9CA3AF', fontSize: 12 },
-  serverAction: { color: '#60A5FA', fontSize: 12, fontWeight: '600' },
-  serverEditor: {
-    backgroundColor: '#111827',
-    borderColor: '#1F2937',
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 16,
-  },
-  serverEditActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-    justifyContent: 'flex-end',
-  },
-  smallBtnSecondary: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#1F2937',
-  },
-  smallBtnSecondaryText: { color: '#93C5FD', fontWeight: '600' },
-  smallBtnPrimary: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#1D4ED8',
-  },
-  smallBtnPrimaryText: { color: '#E0E7FF', fontWeight: '700' },
-  modeSwitch: {
-    flexDirection: 'row',
-    backgroundColor: '#111827',
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 16,
-    marginTop: 8,
-  },
-  modeBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  modeBtnActive: { backgroundColor: '#1D4ED8' },
-  modeBtnText: { color: '#9CA3AF', fontWeight: '600' },
-  modeBtnTextActive: { color: '#E0E7FF' },
-  form: {},
-  label: {
-    color: '#9CA3AF',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 12,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
+  serverBarPressed: { opacity: 0.75 },
+  serverTextWrap: { flex: 1, minWidth: 0 },
+  serverLabel: { color: color.textSecondary },
+  serverUrl: { color: color.textMuted, marginTop: space.xxs },
+  serverAction: { color: color.accentText, flexShrink: 0 },
+
+  serverEditor: { marginBottom: space.lg, gap: space.sm },
+  serverEditActions: { flexDirection: 'row', gap: space.sm, marginTop: space.sm },
+  serverEditBtn: { flex: 1 },
+
+  modeSwitch: { marginTop: space.sm, marginBottom: space.lg },
+
+  form: { gap: space.xs },
+  inputLabel: { color: color.textSecondary, marginTop: space.md },
   input: {
-    backgroundColor: '#1F2937',
-    borderRadius: 10,
-    borderColor: '#374151',
+    backgroundColor: color.raised,
+    borderRadius: radius.md,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: '#E5E7EB',
-    fontSize: 15,
+    borderColor: color.borderStrong,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    color: color.text,
+    minHeight: 50,
   },
-  errorText: {
-    color: '#F87171',
-    marginTop: 12,
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  primaryBtn: {
-    backgroundColor: '#1D4ED8',
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  primaryBtnDisabled: { opacity: 0.7 },
-  primaryBtnText: { color: '#E0E7FF', fontWeight: '700', fontSize: 15 },
-  switchLink: { marginTop: 16, alignItems: 'center' },
-  switchLinkText: { color: '#60A5FA', fontSize: 13 },
+
+  errorWrap: { marginTop: space.lg },
+  submit: { marginTop: space.xl },
+  switchLink: { marginTop: space.lg, alignItems: 'center' },
+  switchLinkText: { color: color.accentText },
+
   skipBtn: {
-    marginTop: 22,
-    borderColor: '#374151',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    marginTop: space.xxl,
+    borderColor: color.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
+    minHeight: 48,
   },
-  skipBtnText: { color: '#9CA3AF', fontSize: 14, fontWeight: '600' },
-  skipBtnHint: {
-    color: '#4B5563',
-    fontSize: 11,
-    marginTop: 4,
-    textAlign: 'center',
-  },
+  skipBtnPressed: { opacity: 0.7 },
+  skipBtnText: { color: color.accentText },
+
   footer: {
-    color: '#4B5563',
-    fontSize: 11,
+    color: color.textFaint,
     textAlign: 'center',
-    marginTop: 32,
+    marginTop: space.xxl,
     lineHeight: 18,
   },
 });

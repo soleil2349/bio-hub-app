@@ -52,6 +52,55 @@ export const CMD_TOGGLE = 1;
 export const CMD_SET_LED = 2;
 /** V3 新增：回声测试（设备收到后打日志，用于确认链路连通） */
 export const CMD_PING = 3;
+/** V4 新增：波形流开关，seq = bit0 ECG | bit1 PPG（0 = 全关） */
+export const CMD_STREAM = 4;
+/** V4 新增：采样率组合，seq = BIO_RATE_* */
+export const CMD_SET_RATE = 5;
+/** V4 新增：统计帧控制，seq: 0=立即一次 1=1Hz 常开 2=关闭 */
+export const CMD_STATS = 6;
+/** V4 新增：清零板载统计计数器 */
+export const CMD_RESET_STATS = 7;
+
+/* ─── V4：波形流帧（与固件 PROTOCOL_V4.md / bio_pkt.h 完全一致）─── */
+
+/** 波形帧魔数。bio_pkt 首字节是心率且被固件夹在 <=220，故 0xE1(225) 永不冲突 */
+export const WF_MAGIC = 0xe1;
+/** 统计帧魔数 */
+export const ST_MAGIC = 0xe2;
+export const WF_HDR_LEN = 7;
+export const ST_LEN = 32;
+
+export const WF_SIG_ECG = 1;
+export const WF_SIG_PPG = 2;
+export const WF_FMT_I16 = 1;
+export const WF_FMT_U32X2 = 5;
+
+/** 心率合理上限：固件按此夹紧，解析器也用它做帧判别 */
+export const HR_SANITY_MAX = 220;
+
+export const PKT_LEN_V2 = 20;
+export const PKT_LEN_V3 = 21;
+export const PKT_LEN_V4 = 24;
+
+/** 采样率组合（CMD_SET_RATE 的 seq） */
+export const BIO_RATE_512_100 = 0;
+export const BIO_RATE_256_100 = 1;
+export const BIO_RATE_512_200 = 2;
+export const BIO_RATE_128_50 = 3;
+
+export const BIO_RATE_LABELS: Record<number, string> = {
+  [BIO_RATE_512_100]: 'ECG 512Hz + PPG 100Hz',
+  [BIO_RATE_256_100]: 'ECG 256Hz + PPG 100Hz',
+  [BIO_RATE_512_200]: 'ECG 512Hz + PPG 200Hz',
+  [BIO_RATE_128_50]: 'ECG 128Hz + PPG 50Hz',
+};
+
+/** stream_state 位（bio_pkt.streamState / stats.streamState） */
+export const BIO_SS_ECG_ON = 0x01;
+export const BIO_SS_PPG_ON = 0x02;
+export const BIO_SS_TIME_VALID = 0x04;
+export const BIO_SS_DROP_1S = 0x08;
+export const BIO_SS_PPG_FINGER = 0x10;
 
 /* ─── LED Modes (CMD_SET_LED 的 seq 值) ─── */
 
@@ -114,28 +163,141 @@ export interface BioPkt {
   devStatus?: DeviceStatus;
   /** 原始 status 字节（无则 undefined） */
   statusByte?: number;
+  /** 包版本：2 = 20 字节旧固件，3 = 21 字节，4 = 24 字节（带流状态） */
+  version: 2 | 3 | 4;
+  /** V4（24 字节包）：波形流状态位图 */
+  streamState?: number;
+  /** V4：最近 1 秒板载丢样数 —— 数据可信度的直接依据 */
+  drop1s?: number;
+}
+
+/* ─── 帧类型判定（三端一致的唯一规则，见 PROTOCOL_V4.md §4）─── */
+
+export type FrameKind = 'bio_pkt' | 'waveform' | 'stats' | 'unknown';
+
+/**
+ * 判定通知帧的类型。
+ *
+ * 规则（长度 + 首字节双重条件，任一条不满足即为 unknown）：
+ *   len 20/21/24 且 buf[0] <= 220  → bio_pkt
+ *   len >= 7     且 buf[0] == 0xE1 → waveform
+ *   len == 32    且 buf[0] == 0xE2 → stats
+ *   其它                            → unknown（**必须丢弃并计数**）
+ *
+ * 为什么必须这么严格：V3 的 parser 只判断 `length < 20`，于是 50 字节的
+ * 0xEC 波形帧被当成生理数据解析（hr = 0xEC = 236），可能污染数据库。
+ */
+export function classifyFrame(data: Uint8Array): FrameKind {
+  const n = data.length;
+  if (n === 0) return 'unknown';
+  const b0 = data[0];
+  if ((n === PKT_LEN_V2 || n === PKT_LEN_V3 || n === PKT_LEN_V4) && b0 <= HR_SANITY_MAX) {
+    return 'bio_pkt';
+  }
+  if (n >= WF_HDR_LEN && b0 === WF_MAGIC) return 'waveform';
+  if (n === ST_LEN && b0 === ST_MAGIC) return 'stats';
+  return 'unknown';
+}
+
+/* ─── V4 波形帧 ─── */
+
+export interface WaveformFrame {
+  signal: number;
+  fmt: number;
+  count: number;
+  /** 本帧第一个点的绝对序号（每路信号独立、单调递增）——丢样检测的核心 */
+  index: number;
+  /** ECG：int16 采样值 */
+  samples: Int16Array;
+  /** PPG：ir/red 成对（严格时间对齐，便于比值法算 SpO2） */
+  ir: Uint32Array;
+  red: Uint32Array;
+}
+
+/** 解析 0xE1 波形帧；结构不符（长度/n/类型不匹配）返回 null。 */
+export function parseWaveformFrame(data: Uint8Array): WaveformFrame | null {
+  if (data.length < WF_HDR_LEN || data[0] !== WF_MAGIC) return null;
+  const typeByte = data[1];
+  const signal = typeByte & 0x0f;
+  const fmt = (typeByte >> 4) & 0x0f;
+  const count = data[2];
+  if (count === 0) return null; // 协议上非法，宁可丢弃也不要"看似合法的空帧"
+  const index =
+    (data[3] | (data[4] << 8) | (data[5] << 16) | (data[6] << 24)) >>> 0;
+
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const off = WF_HDR_LEN;
+
+  if (signal === WF_SIG_ECG && fmt === WF_FMT_I16) {
+    if (data.length !== off + count * 2) return null;
+    const samples = new Int16Array(count);
+    for (let i = 0; i < count; i++) samples[i] = view.getInt16(off + i * 2, true);
+    return { signal, fmt, count, index, samples, ir: new Uint32Array(0), red: new Uint32Array(0) };
+  }
+
+  if (signal === WF_SIG_PPG && fmt === WF_FMT_U32X2) {
+    if (data.length !== off + count * 8) return null;
+    const ir = new Uint32Array(count);
+    const red = new Uint32Array(count);
+    for (let i = 0; i < count; i++) {
+      ir[i] = view.getUint32(off + i * 8, true);
+      red[i] = view.getUint32(off + i * 8 + 4, true);
+    }
+    return { signal, fmt, count, index, samples: new Int16Array(0), ir, red };
+  }
+
+  return null; // 未知 signal/fmt
+}
+
+/* ─── V4 统计帧 ─── */
+
+export interface StatsFrame {
+  version: number;
+  uptimeS: number;
+  /** BMD101 UART 环形缓冲溢出**字节数**（线路层丢数据） */
+  uartRxDrop: number;
+  /** ECG 波形缓冲溢出**点数** */
+  ecgStreamDrop: number;
+  /** PPG 波形缓冲溢出**对数** */
+  ppgStreamDrop: number;
+  /** MAX30102 FIFO 溢出次数 */
+  fifoOvf: number;
+  /** 通知发送失败次数 */
+  ntfErr: number;
+  ecgRateHz: number;
+  ppgRateHz: number;
+  streamState: number;
+  ecgDecim: number;
+  chkFail: number;
+}
+
+export function parseStatsFrame(data: Uint8Array): StatsFrame | null {
+  if (data.length !== ST_LEN || data[0] !== ST_MAGIC) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    version: data[1],
+    uptimeS: view.getUint16(2, true),
+    uartRxDrop: view.getUint32(4, true),
+    ecgStreamDrop: view.getUint32(8, true),
+    ppgStreamDrop: view.getUint32(12, true),
+    fifoOvf: view.getUint32(16, true),
+    ntfErr: view.getUint32(20, true),
+    ecgRateHz: view.getUint16(24, true),
+    ppgRateHz: view.getUint16(26, true),
+    streamState: data[28],
+    ecgDecim: data[29],
+    chkFail: data[30],
+  };
 }
 
 /**
- * Parse 20-byte bio_pkt_t from BLE/SLE notification.
- * Layout (little-endian, packed):
- *   [0]    uint8   hr
- *   [1]    uint8   spo2
- *   [2-5]  uint32  ir
- *   [6]    int8    temp_i
- *   [7]    uint8   temp_f (low 4 bits * 0.0625)
- *   [8]    uint8   pi_x10
- *   [9]    uint8   sbp
- *   [10]   uint8   dbp
- *   [11]   uint8   flags
- *   [12-13] uint16 ptt_ms
- *   [14]   uint8   ecg_hr
- *   [15]   uint8   ecg_sig
- *   [16-17] int16  ecg_raw
- *   [18-19] uint16 rr_ms
+ * 解析 20/21/24 字节 bio_pkt（小端）。
+ *
+ * **严格版**：长度必须是 20/21/24 且首字节 <= 220（心率上限），否则返回 null。
+ * 这一条是防止"波形帧被当成生理数据"的关键 —— 见 classifyFrame 的说明。
  */
 export function parseBioPkt(data: Uint8Array): BioPkt | null {
-  if (data.length < 20) return null;
+  if (classifyFrame(data) !== 'bio_pkt') return null;
 
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 
@@ -155,11 +317,13 @@ export function parseBioPkt(data: Uint8Array): BioPkt | null {
   const ecgRaw = view.getInt16(16, true);
   const rrMs = view.getUint16(18, true);
 
-  // V3 固件：第 21 字节（下标 20）为设备状态位图；
-  // 旧固件只发 20 字节 → devStatus 为 undefined，UI 需做兼容判断。
+  const version: 2 | 3 | 4 =
+    data.length === PKT_LEN_V2 ? 2 : data.length === PKT_LEN_V3 ? 3 : 4;
+
+  // 21/24 字节包的第 21 字节为设备状态位图；20 字节旧固件没有。
   let statusByte: number | undefined;
   let devStatus: DeviceStatus | undefined;
-  if (data.length >= 21) {
+  if (data.length >= PKT_LEN_V3) {
     statusByte = data[20];
     devStatus = {
       sleConn: !!(statusByte & BIO_ST_SLE_CONN),
@@ -173,7 +337,7 @@ export function parseBioPkt(data: Uint8Array): BioPkt | null {
     };
   }
 
-  return {
+  const pkt: BioPkt = {
     hr,
     spo2,
     ir,
@@ -194,7 +358,15 @@ export function parseBioPkt(data: Uint8Array): BioPkt | null {
     rrMs,
     devStatus,
     statusByte,
+    version,
   };
+
+  // V4：24 字节包的额外 3 字节
+  if (data.length === PKT_LEN_V4) {
+    pkt.streamState = data[21];
+    pkt.drop1s = view.getUint16(22, true);
+  }
+  return pkt;
 }
 
 /**
@@ -214,6 +386,13 @@ export function buildCtrlPkt(
   buf[1] = seq & 0xff;
   view.setUint16(2, uptimeS & 0xffff, true);
   return buf;
+}
+
+/**
+ * 构造 CMD_STREAM 的 seq 值（哪几路波形要开）。
+ */
+export function streamSeq(ecg: boolean, ppg: boolean): number {
+  return (ecg ? BIO_SS_ECG_ON : 0) | (ppg ? BIO_SS_PPG_ON : 0);
 }
 
 /**
