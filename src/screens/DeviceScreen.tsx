@@ -57,7 +57,7 @@ import {
   StatusBadge,
   useLargeText,
 } from '../components/ui';
-import { color, radius, space, type, vital } from '../theme';
+import { color, elevation, monoFont, radius, space, type, vital } from '../theme';
 
 /**
  * 会话使用的采样率组合。
@@ -762,7 +762,7 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
       )}
 
       <SectionTitle>调试日志</SectionTitle>
-      <Card>
+      <Card style={styles.debugWell}>
         {debugLines.length === 0 ? (
           <Text style={[type.body, styles.debugEmptyText]}>暂无日志</Text>
         ) : (
@@ -908,6 +908,7 @@ const styles = StyleSheet.create({
 
   /* Debug tab */
   debugStack: { gap: space.sm },
+  debugWell: { backgroundColor: color.sunken, ...elevation.sunken },
   debugEmptyText: { color: color.textMuted },
   debugMissing: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.lg },
   debugMissingText: { color: color.dangerText },
@@ -915,14 +916,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
     color: color.textSecondary,
-    fontFamily: 'monospace',
+    fontFamily: monoFont,
     marginBottom: space.xxs,
   },
   debugSvcUuid: {
     fontSize: 12,
     lineHeight: 17,
     color: color.accentText,
-    fontFamily: 'monospace',
+    fontFamily: monoFont,
     fontWeight: '700',
     marginBottom: space.xs,
   },
@@ -930,6 +931,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
     color: color.textMuted,
-    fontFamily: 'monospace',
+    fontFamily: monoFont,
   },
 });

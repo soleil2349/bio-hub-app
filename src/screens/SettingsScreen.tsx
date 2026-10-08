@@ -281,7 +281,7 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
               <Switch
                 value={settings.autoRecord}
                 onValueChange={(v) => updateSetting('autoRecord', v)}
-                trackColor={{ false: color.borderStrong, true: color.accentStrong }}
+                trackColor={{ false: color.borderStrong, true: color.accent }}
                 thumbColor={settings.autoRecord ? color.accentText : color.textMuted}
                 accessibilityLabel="自动记录"
               />
@@ -295,7 +295,7 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
               <Switch
                 value={settings.showDebugOnConnect}
                 onValueChange={(v) => updateSetting('showDebugOnConnect', v)}
-                trackColor={{ false: color.borderStrong, true: color.accentStrong }}
+                trackColor={{ false: color.borderStrong, true: color.accent }}
                 thumbColor={settings.showDebugOnConnect ? color.accentText : color.textMuted}
                 accessibilityLabel="连接时显示调试面板"
               />
@@ -495,7 +495,7 @@ const styles = StyleSheet.create({
     gap: space.md,
     padding: space.lg,
   },
-  rowPressed: { backgroundColor: color.subtle },
+  rowPressed: { backgroundColor: color.raisedHigh },
   settingInfo: { flex: 1, minWidth: 0 },
   settingLabel: { color: color.text },
   settingDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 17 },

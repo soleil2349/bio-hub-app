@@ -35,6 +35,8 @@ import {
   SCREEN_PADDING,
   TOUCH_TARGET,
   color,
+  elevation,
+  monoFont,
   motion,
   radius,
   space,
@@ -260,7 +262,7 @@ export function IconButton({
 }
 
 const VARIANTS: Record<ButtonVariant, { bg: string; border: string; text: string }> = {
-  primary: { bg: color.accentStrong, border: color.accentStrong, text: color.onAccent },
+  primary: { bg: color.accent, border: color.accentLip, text: color.onAccent },
   secondary: { bg: color.raised, border: color.border, text: color.accentText },
   danger: { bg: color.dangerSurface, border: color.dangerBorder, text: color.dangerText },
   ghost: { bg: 'transparent', border: 'transparent', text: color.accentText },
@@ -418,12 +420,20 @@ export interface MetricTileProps {
  * left border, which clipped as soon as the system font scale went up.
  */
 export function MetricTile({ label, value, unit, hue, trend, emphasis }: MetricTileProps) {
+  // Primary channels carry a faint wash of their own trace colour, the way a
+  // monitor tints the parameter it is foregrounding. 12% alpha keeps the
+  // surface dark enough that the text ramp above still clears 4.5:1.
+  const tint = emphasis && hue ? { backgroundColor: hue + '1F', borderColor: hue + '3D' } : null;
+
   return (
-    <View style={styles.metricTile}>
+    <View style={[styles.metricTile, tint]}>
       <View style={styles.metricHeader}>
-        <Text style={[type.label, styles.metricLabel]} numberOfLines={1}>
-          {label}
-        </Text>
+        <View style={styles.metricLabelWrap}>
+          {hue ? <View style={[styles.metricSwatch, { backgroundColor: hue }]} /> : null}
+          <Text style={[type.caption, styles.metricLabel]} numberOfLines={1}>
+            {label}
+          </Text>
+        </View>
         {trend && trend !== 'stable' ? (
           <Icon
             name={trend === 'up' ? 'arrowUp' : 'arrowDown'}
@@ -597,13 +607,13 @@ export function Skeleton({
   height?: number;
   style?: StyleProp<ViewStyle>;
 }) {
-  const pulse = useRef(new Animated.Value(0.4)).current;
+  const pulse = useRef(new Animated.Value(0.55)).current;
 
   useEffect(() => {
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.55, duration: 700, useNativeDriver: true }),
       ]),
     );
     anim.start();
@@ -694,8 +704,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: color.raised,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
+    ...elevation.raised,
     overflow: 'hidden',
   },
   cardPadded: { padding: space.lg },
@@ -737,8 +746,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: color.sunken,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
+    ...elevation.sunken,
     padding: space.xs,
     gap: space.xs,
   },
@@ -750,10 +758,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
   segmentAuto: { flex: 0, minWidth: 76 },
-  segmentActive: { backgroundColor: color.accentSurface },
-  segmentPressed: { backgroundColor: color.subtle },
+  segmentActive: { backgroundColor: color.accentSurface, borderWidth: 1, borderColor: color.accentBorder },
+  segmentPressed: { backgroundColor: color.raisedHigh },
   segmentText: { color: color.textMuted },
   segmentTextActive: { color: color.accentText },
 
@@ -780,9 +790,10 @@ const styles = StyleSheet.create({
   metricTile: {
     backgroundColor: color.raised,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
-    padding: space.md,
+    ...elevation.raised,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    gap: space.xs,
   },
   metricHeader: {
     flexDirection: 'row',
@@ -791,10 +802,12 @@ const styles = StyleSheet.create({
     gap: space.xs,
     marginBottom: space.xs,
   },
-  metricLabel: { color: color.textMuted, flexShrink: 1, fontWeight: '600' },
+  metricLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexShrink: 1, minWidth: 0 },
+  metricSwatch: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
+  metricLabel: { color: color.textMuted, flexShrink: 1, minWidth: 0 },
   metricValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: space.xs + 2 },
-  metricValue: { fontSize: 22, lineHeight: 28, fontWeight: '700', color: color.text, flexShrink: 1 },
-  metricValueLg: { fontSize: 30, lineHeight: 36, fontWeight: '700', color: color.text, flexShrink: 1 },
+  metricValue: { fontSize: 23, lineHeight: 29, fontWeight: '700', color: color.text, flexShrink: 1, letterSpacing: -0.4 },
+  metricValueLg: { fontSize: 32, lineHeight: 38, fontWeight: '700', color: color.text, flexShrink: 1, letterSpacing: -0.8 },
   metricUnit: { color: color.textMuted, flexShrink: 0 },
 
   /* Detail rows */
@@ -818,7 +831,7 @@ const styles = StyleSheet.create({
   detailRowStacked: { paddingVertical: space.md, gap: space.xs },
   detailLabelStacked: { color: color.textMuted },
   detailValueStacked: { color: color.text, fontWeight: '600' },
-  detailMono: { fontFamily: 'monospace', fontSize: 12, lineHeight: 18 },
+  detailMono: { fontFamily: monoFont, fontSize: 12, lineHeight: 18, letterSpacing: 0 },
 
   /* Stat cells */
   statCell: { flexGrow: 1, flexBasis: '30%', minWidth: 84, gap: space.xxs },
@@ -831,7 +844,7 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: radius.pill,
-    backgroundColor: color.subtle,
+    backgroundColor: color.raised,
     borderWidth: 1,
     borderColor: color.border,
     alignItems: 'center',
@@ -847,7 +860,7 @@ const styles = StyleSheet.create({
   },
   emptyAction: { marginTop: space.xl },
 
-  skeleton: { backgroundColor: color.subtle, borderRadius: radius.sm },
+  skeleton: { backgroundColor: color.raisedHigh, borderRadius: radius.sm, opacity: 1 },
   skeletonRow: {
     flexDirection: 'row',
     alignItems: 'center',

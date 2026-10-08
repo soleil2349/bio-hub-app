@@ -389,7 +389,7 @@ const styles = StyleSheet.create({
 
   cardExpanded: { borderColor: color.accent },
   sessionHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.lg },
-  rowPressed: { backgroundColor: color.subtle },
+  rowPressed: { backgroundColor: color.raisedHigh },
   sessionInfo: { flex: 1, minWidth: 0, gap: space.xxs },
   sessionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   sessionName: { color: color.text, flexShrink: 1, minWidth: 0 },

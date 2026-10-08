@@ -2,78 +2,108 @@
  * BIO HUB design tokens — the single source of truth for colour, spacing,
  * radius and type across every screen.
  *
- * Why this file exists
- * --------------------
- * Before, each screen carried its own hex literals: three different blues acted
- * as "the" primary action (#4A90D9 / #2563EB / #1D4ED8), muted greys ranged
- * from #4B5563 to #9CA3AF with no rule, and spacing was a mix of 6/8/10/14/20.
- * That drift is what makes an interface feel assembled rather than designed,
- * and it is impossible to audit. Everything visual now resolves through here.
+ * Visual world: CLINICAL INSTRUMENT
+ * ---------------------------------
+ * The first pass fixed the layout failures but kept the original palette, which
+ * was the stock Tailwind dark ladder almost verbatim — bg #0A0E1A, surface
+ * #111827 (gray-900), card #1F2937 (gray-800), border #374151 (gray-700),
+ * muted #6B7280 (gray-500), accent #2563EB (blue-600). That is the single most
+ * recognisable "default AI dark theme" in existence: a flat cool-blue-grey
+ * ladder, three identical-value surface steps, a saturated stock-blue accent,
+ * and eight equally-bright data hues competing with it. Nothing in it was a
+ * decision.
+ *
+ * This palette is built instead around what the product actually is: a bedside
+ * physiological monitor. Real patient monitors are near-black chrome, neutral
+ * labels, and colour carried almost entirely by the traces and the numerics.
+ * So:
+ *
+ *   - The black is deeper and tinted cyan rather than blue-grey, which reads as
+ *     "instrument" instead of "admin dashboard".
+ *   - Surfaces form a real luminance ladder, and raised panels carry a hairline
+ *     top highlight so they read as lit from above rather than pasted on.
+ *   - The accent is a desaturated instrument cyan, deliberately quieter than the
+ *     stock blue it replaces, because eight data hues already own the colour.
+ *   - Colour saturation is reserved for measurements (values, traces, dots).
+ *     Chrome — labels, metadata, borders — stays neutral.
  *
  * Contrast contract
  * -----------------
- * Every colour in `color` is measured against all five surfaces and clears
- * WCAG AA (>= 4.5:1) for body text. Verified ratios are noted inline. If you
- * add a colour, measure it before you use it — the previous palette shipped
- * #4B5563 body text at 1.94:1, which is effectively invisible on a dark screen.
+ * Every colour in `color` is measured against all ten surfaces it can appear on
+ * and clears WCAG AA (>= 4.5:1) for body text. The worst case is recorded inline.
+ * Add a colour only after measuring it: the original palette shipped #4B5563
+ * body text at 1.94:1, which is invisible on a dark screen.
  *
- * Deliberate constraint: this is a DARK-LOCKED app (an instrument panel read in
- * dim rooms next to a sensor board), so there is one theme, not two.
+ * This is a DARK-LOCKED app by design — an instrument read in dim rooms next to
+ * a sensor board. There is one theme, not two.
  */
 
 /* ── Surfaces ────────────────────────────────────────────────────────────── */
 
 export const color = {
   /** App background — deepest layer. Never pure black. */
-  bg: '#0A0E1A',
-  /** Headers and bottom bars. */
-  surface: '#111827',
+  bg: '#06090E',
+  /** Headers and toolbars — the bezel lip above the content. */
+  surface: '#0F1822',
   /** Cards and list rows — the default content surface. */
-  raised: '#1F2937',
-  /** Inset wells: waveform plots, text inputs, code blocks. */
-  sunken: '#0F172A',
-  /** Quiet panels that sit between surface and raised. */
-  subtle: '#1E293B',
+  raised: '#121B23',
+  /** Inset panels sitting inside a card, one step below `raised`. */
+  subtle: '#0C1319',
+  /**
+   * A step ABOVE `raised`. Needed because pressed states and skeleton blocks
+   * sit on top of a card: with the deeper black, tinting *downward* from the
+   * card is invisible. Feedback has to move up the ramp, not down it.
+   * Measures 1.21:1 against `raised`.
+   */
+  raisedHigh: '#1E2B3A',
+  /** Inset wells: waveform plots, text inputs, log blocks. */
+  sunken: '#070C11',
   /** Tinted surface for selected / accented rows. */
-  accentSurface: '#152A44',
+  accentSurface: '#0A2A33',
 
   /* ── Borders & dividers ── */
-  border: '#2A3441',
-  borderStrong: '#3A4655',
-  divider: '#25303D',
+  /** Hairline between same-value surfaces. Decorative, not a WCAG boundary. */
+  border: '#1D2833',
+  /** Border on interactive or emphasised edges. */
+  borderStrong: '#2A3947',
+  divider: '#16202A',
+  /** 1px top edge on raised panels: reads as light falling from above. */
+  highlight: 'rgba(255,255,255,0.055)',
 
   /* ── Text ramp (all >= 4.5:1 on every surface above) ── */
-  /** Primary copy, values, headings. 12.4:1 on raised. */
-  text: '#E8ECF4',
-  /** Secondary copy, descriptions. 8.8:1 on raised. */
-  textSecondary: '#C2C9D6',
-  /** Labels, metadata, units. 5.9:1 on raised. */
-  textMuted: '#9BA5B4',
-  /** Lowest tier: footers, hints. 4.3:1 on raised, 5.6:1 on bg — pair with bg, not raised. */
-  textFaint: '#818C9C',
+  /** Primary copy, values, headings. 12.9:1 worst case. */
+  text: '#E6EEF5',
+  /** Secondary copy, descriptions. 9.1:1 worst case. */
+  textSecondary: '#BCCBD9',
+  /** Labels, metadata, units. 6.0:1 worst case. */
+  textMuted: '#93A6B6',
+  /** Lowest tier: footers, hints. 4.6:1 worst case. */
+  textFaint: '#8799A9',
 
-  /* ── Accent: exactly one primary action colour ── */
-  accent: '#4A90D9',
-  accentStrong: '#2563EB',
-  /** Accent-tinted text on dark surfaces. 8.2:1 on raised. */
-  accentText: '#9EC5F0',
+  /* ── Accent: one instrument cyan, used for interaction only ── */
+  /** Fill for primary buttons. White text on it measures 5.36:1. */
+  accent: '#0E7490',
+  /** Brighter accent for text and icons on dark. 10.4:1 worst case. */
+  accentText: '#67E8F9',
+  accentBorder: '#155E75',
+  /** Lit top edge on a filled accent button — the same "light from above" cue. */
+  accentLip: '#1893B0',
+  /** Keyboard/accessibility focus ring and active-trace indication. */
+  focus: '#22D3EE',
 
   /* ── Semantic state ── */
   success: '#4ADE80',
   successText: '#7BE8A6',
   successSurface: '#0C2A18',
-  warning: '#FBBF24',
-  warningText: '#FCD34D',
-  warningSurface: '#2C2107',
   danger: '#F87171',
   dangerText: '#FCA5A5',
   dangerSurface: '#2D1515',
-  /** Resting/unknown state. Never use for real content text. */
-  neutral: '#64748B',
+  warning: '#FBBF24',
+  warningText: '#FCD34D',
+  warningSurface: '#2C2107',
 
-  /* ── Tinted borders that pair with the semantic surfaces above ── */
-  accentBorder: '#2B4C74',
-  successBorder: '#166534',
+  /* ── Tinted borders pairing with the semantic surfaces ── */
+  successBorder: '#14532D',
   warningBorder: '#78350F',
   dangerBorder: '#7F1D1D',
 
@@ -82,21 +112,29 @@ export const color = {
   violetSurface: '#241B3D',
   violetBorder: '#4C3A80',
 
-  /* ── Text placed on a filled accent surface ── */
+  /* ── Text placed on a filled accent or danger surface ── */
   onAccent: '#FFFFFF',
+  /** Text on the bright danger-red badge fill. 6.1:1 against `danger`. */
+  onDanger: '#1A0505',
 
   /* ── Plot chrome: grid and axis lines inside waveform wells ── */
-  plotGrid: '#1E293B',
-  plotAxis: '#334155',
+  plotGrid: '#16232E',
+  plotAxis: '#24333F',
+
+  /** Resting/unknown state. 4.5:1 worst case. */
+  neutral: '#8593A0',
 } as const;
 
 /**
- * Vital-sign hues.
+ * Vital-sign trace colours.
  *
- * These are a *measurement* palette, not decoration: each metric keeps its hue
- * wherever it appears (live tile, trend line, statistics row, report) so the
- * eye can track one signal across screens. They are applied to values, dots and
- * plot strokes — never as card borders or backgrounds.
+ * A measurement palette, not decoration. In a monitor the trace owns the
+ * saturation and the chrome stays neutral, so each hue is applied to values,
+ * dots and plot strokes — never to card borders or backgrounds.
+ *
+ * Each metric keeps its hue wherever it appears (live tile, trend line,
+ * statistics row, report) so the eye can track one signal across screens.
+ * All ten measure >= 5.8:1 on the card surface.
  */
 export const vital = {
   hr: '#F87171',
@@ -131,15 +169,15 @@ export const SCREEN_PADDING = space.lg;
 /** Cap content width on tablets / foldables so rows don't stretch absurdly. */
 export const MAX_CONTENT_WIDTH = 560;
 
-/* ── Radius — one documented system ──────────────────────────────────────── */
+/* ── Radius — one documented system, tightened for a technical read ──────── */
 
 export const radius = {
-  /** Inputs, small buttons, chips. */
-  sm: 8,
+  /** Inputs, small buttons, chips, plots. */
+  sm: 6,
   /** Cards, list rows, large buttons. */
-  md: 12,
+  md: 10,
   /** Sheets, modals, hero panels. */
-  lg: 16,
+  lg: 14,
   /** Pills and dots. */
   pill: 999,
 } as const;
@@ -150,18 +188,21 @@ type TypeStyle = {
   fontSize: number;
   lineHeight: number;
   fontWeight: '400' | '600' | '700';
+  letterSpacing?: number;
 };
 
 /**
  * Every lineHeight is >= 1.2 x fontSize: Android clips ascenders and descenders
- * aggressively at ratios below ~1.1, which is how CJK + Latin mixed labels lose
- * their top strokes.
+ * aggressively below ~1.1, which is how CJK + Latin mixed labels lose strokes.
+ *
+ * Large sizes carry negative tracking. A readout is a measurement, not a
+ * headline — tight numerals read as an instrument, loose ones read as a web page.
  */
 export const type = {
-  /** Big numerals: vitals, scores. Tabular so digits don't jitter. */
-  metric: { fontSize: 28, lineHeight: 34, fontWeight: '700' } as TypeStyle,
+  /** Big numerals: vitals, scores. Always pair with `tabularNums`. */
+  metric: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6 } as TypeStyle,
   /** Screen titles. */
-  h1: { fontSize: 20, lineHeight: 26, fontWeight: '700' } as TypeStyle,
+  h1: { fontSize: 20, lineHeight: 26, fontWeight: '700', letterSpacing: -0.2 } as TypeStyle,
   /** Card titles, section headings. */
   h2: { fontSize: 16, lineHeight: 22, fontWeight: '600' } as TypeStyle,
   /** Body copy and list values. */
@@ -175,6 +216,15 @@ export const type = {
 /** Tabular figures keep live numbers from shifting width as they change. */
 export const tabularNums = { fontVariant: ['tabular-nums' as const] };
 
+/**
+ * Monospace voice for measurement readouts.
+ *
+ * Android and iOS both ship a usable mono face, and in this app it is doing real
+ * work rather than costume: it keeps digit columns aligned and stops live values
+ * from reflowing as they tick.
+ */
+export const monoFont = 'monospace';
+
 /* ── Touch targets ───────────────────────────────────────────────────────── */
 
 /** Apple HIG 44pt / Material 48dp. Anything interactive must reach this. */
@@ -186,16 +236,23 @@ export const HIT_SLOP = { top: 10, bottom: 10, left: 10, right: 10 } as const;
 /* ── Elevation ───────────────────────────────────────────────────────────── */
 
 /**
- * On dark surfaces a drop shadow is nearly invisible, so hierarchy comes from a
- * lighter surface plus a hairline top highlight instead.
+ * On a near-black surface a drop shadow is invisible, so hierarchy comes from a
+ * lighter surface plus a hairline top highlight — the same trick physical rack
+ * equipment uses to read as a separate panel.
  */
 export const elevation = {
-  card: {
+  /** Applied by `Card` and raised panels. */
+  raised: {
     borderWidth: 1,
     borderColor: color.border,
+    borderTopColor: color.highlight,
   },
-  /** 1px inner highlight that reads as a lit top edge. */
-  highlight: { borderTopWidth: 1, borderTopColor: '#33415580' },
+  /** Inset wells (plots, inputs) get the inverse: a darker top edge. */
+  sunken: {
+    borderWidth: 1,
+    borderColor: color.border,
+    borderTopColor: 'rgba(0,0,0,0.35)',
+  },
 } as const;
 
 /* ── Motion ──────────────────────────────────────────────────────────────── */

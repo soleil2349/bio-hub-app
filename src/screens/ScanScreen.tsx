@@ -29,7 +29,7 @@ import {
   SegmentedControl,
   SkeletonRow,
 } from '../components/ui';
-import { color, radius, space, tabularNums, type } from '../theme';
+import { color, monoFont, radius, space, tabularNums, type } from '../theme';
 
 interface Props {
   onConnected: (device: Device) => void;
@@ -363,7 +363,7 @@ const styles = StyleSheet.create({
     borderColor: color.border,
     padding: space.md,
   },
-  deviceCardMatch: { borderColor: color.accentStrong, backgroundColor: color.accentSurface },
+  deviceCardMatch: { borderColor: color.accentBorder, backgroundColor: color.accentSurface },
   deviceInfo: { flex: 1, minWidth: 0, gap: space.xs },
   deviceTitleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   deviceName: { color: color.text, flexShrink: 1, minWidth: 0 },
@@ -372,7 +372,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     color: color.textFaint,
-    fontFamily: 'monospace',
+    fontFamily: monoFont,
   },
   deviceMetaRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xxs },
   bars: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 15 },

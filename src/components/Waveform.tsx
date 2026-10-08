@@ -13,7 +13,7 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Line, Polyline, Rect } from 'react-native-svg';
-import { color, radius, space, type } from '../theme';
+import { color, elevation, radius, space, type } from '../theme';
 
 export interface WaveformProps {
   data: number[];
@@ -90,9 +90,9 @@ export default function Waveform({
         </View>
       ) : null}
 
-      <View style={[styles.plot, { width, height }]}>
+      <View style={[styles.plot, styles.plotWell, { width, height }]}>
         <Svg width={width} height={height}>
-          <Rect x={0} y={0} width={width} height={height} fill={color.sunken} rx={8} />
+          <Rect x={0} y={0} width={width} height={height} fill={color.sunken} rx={radius.sm} />
 
           {showGrid
             ? gridLines.map((y, i) => (
@@ -146,6 +146,7 @@ const styles = StyleSheet.create({
   label: { color: color.textSecondary, flexShrink: 1, minWidth: 0 },
   unit: { color: color.textMuted, flexShrink: 0 },
   plot: { borderRadius: radius.sm, overflow: 'hidden' },
+  plotWell: { ...elevation.sunken, backgroundColor: color.sunken },
   emptyOverlay: {
     position: 'absolute',
     top: 0,
