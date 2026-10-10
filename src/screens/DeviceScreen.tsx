@@ -39,7 +39,8 @@ import {
   buildQualityUpload,
   stashSessionWaveforms,
 } from '../waveform';
-import { BIO_RATE_128_50 } from '../protocol';
+import { BIO_RATE_512_100 } from '../protocol';
+import { estimateHrBpm } from '../waveform';
 import Waveform from '../components/Waveform';
 import TabBar from '../components/TabBar';
 import Icon from '../components/Icon';
@@ -57,20 +58,21 @@ import {
   StatusBadge,
   useLargeText,
 } from '../components/ui';
-import { color, elevation, monoFont, radius, space, type, vital } from '../theme';
+import { monoFont, radius, space, sunkenChrome, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 /**
  * 会话使用的采样率组合。
  *
- * 实测（2026-09-29，自绘板 V3 ↔ PC 侧 bleak）：
- *   · 单通道 ECG 512Hz → 无损；单通道 PPG 100Hz → 无损；
- *   · **双通道 512+100 会丢样**（板载 ring 溢出约 8%，且 index 缺口看不见），
- *     根因是 MAX30102 FIFO 溢出（ntf_err=0，不是 BLE 发不出去）；
- *   · 双通道 **128+50 → 完全无损**（ppg_drop=0、fifo_ovf 不增长）。
- * 所以默认用 128/50 跑双通道，保证"上传的数据是完整的"。
- * 需要高分辨率单通道时把这里改成 BIO_RATE_512_100 并只开一路。
+ * BMD101 心电固定 512 SPS，这是芯片上限。2026-09-29 双通道 512+100 曾因
+ * MAX30102 FIFO 溢出丢约 8%，所以当时降到 128+50。2026-10-09 在 PPG 按需上电、
+ * 射频改 20ms 之后重测：双通道 512 Hz + 100 Hz，18 秒与 12 秒均丢点 0、通知失败 0。
+ * App 侧重算心率不减少空中字节（压缩必须发生在发包之前），因此直接用这条已经
+ * 测过的无损速率，不再为省带宽把心电抽成 128 Hz。
  */
-const SESSION_RATE_CODE = BIO_RATE_128_50;
+const SESSION_RATE_CODE = BIO_RATE_512_100;
+/** 固件 ecg_sig：0 最好，200 表示无接触。达到此值就不用芯片心率。 */
+const ECG_SIG_UNUSABLE = 100;
 const STREAM_ECG_AND_PPG = 3;
 
 interface Props {
@@ -95,16 +97,39 @@ const EMPTY_DISPLAY: DisplayValues = {
   ecgSig: '--', ir: '--', ecgRaw: '--', rrMs: '--',
 };
 
-function mergeDisplay(prev: DisplayValues, pkt: BioPkt): DisplayValues {
+/** 芯片心率与血氧心率相差不超过 20% 才算对得上。 */
+function agreesWithPpg(candidate: number, ppgHr: number): boolean {
+  if (candidate <= 0) return false;
+  if (ppgHr <= 0) return true;
+  return Math.abs(candidate - ppgHr) / ppgHr <= 0.2;
+}
+
+/**
+ * 心电心率显示。
+ * 信号质量差，或芯片心率与血氧心率对不上时，不用芯片那个数。
+ * 波形重算的心率若能与血氧对上，就用重算值；否则显示空，避免 54 和 90 长期并排。
+ */
+function pickEcgHr(pkt: BioPkt, waveformHr: number | null, _prev: string): string {
+  if (pkt.ecgSig < ECG_SIG_UNUSABLE && agreesWithPpg(pkt.ecgHr, pkt.hr)) {
+    return String(pkt.ecgHr);
+  }
+  if (waveformHr && agreesWithPpg(waveformHr, pkt.hr)) {
+    return String(waveformHr);
+  }
+  return '--';
+}
+
+function mergeDisplay(prev: DisplayValues, pkt: BioPkt, waveformHr: number | null): DisplayValues {
   return {
     hr:     pkt.hr     ? String(pkt.hr)            : prev.hr,
-    ecgHr:  pkt.ecgHr  ? String(pkt.ecgHr)         : prev.ecgHr,
+    ecgHr:  pickEcgHr(pkt, waveformHr, prev.ecgHr),
     spo2:   pkt.spo2   ? String(pkt.spo2)          : prev.spo2,
     tempC:  pkt.tempC  ? pkt.tempC.toFixed(1)       : prev.tempC,
-    sbp:    pkt.sbp    ? String(pkt.sbp)            : prev.sbp,
-    dbp:    pkt.dbp    ? String(pkt.dbp)            : prev.dbp,
+    // PTT 标志掉了就清掉，避免上一拍的血压一直停在屏幕上
+    sbp:    pkt.flags.pttValid && pkt.sbp ? String(pkt.sbp) : '--',
+    dbp:    pkt.flags.pttValid && pkt.dbp ? String(pkt.dbp) : '--',
     pi:     pkt.pi     ? pkt.pi.toFixed(1)          : prev.pi,
-    pttMs:  pkt.pttMs  ? String(pkt.pttMs)          : prev.pttMs,
+    pttMs:  pkt.flags.pttValid && pkt.pttMs ? String(pkt.pttMs) : '--',
     ecgSig: String(pkt.ecgSig),
     ir:     pkt.ir     ? String(pkt.ir)             : prev.ir,
     ecgRaw: String(pkt.ecgRaw),
@@ -130,6 +155,7 @@ function StatBlock({
   unit: string;
   hue: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.statBlock}>
       <View style={styles.statBlockHeader}>
@@ -151,6 +177,7 @@ function StatBlock({
 
 /** Monospace log line that wraps instead of running off the screen. */
 function LogLine({ text }: { text: string }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <Text style={styles.debugLine} selectable>
       {text}
@@ -159,6 +186,8 @@ function LogLine({ text }: { text: string }) {
 }
 
 export default function DeviceScreen({ device, onDisconnect, autoRecord = true }: Props) {
+  const { color, vital } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [data, setData] = useState<BioPkt | null>(null);
   const [display, setDisplay] = useState<DisplayValues>(EMPTY_DISPLAY);
   const [paused, setPaused] = useState(false);
@@ -188,6 +217,9 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
   const sessionIdRef = useRef<number | null>(null);
   /** 协议 v4 波形重组器：会话期间持续按 index 落位并核算丢样 */
   const assemblerRef = useRef(new WaveformAssembler());
+  /** 由最近一段心电波形重算的心率；芯片心率不可用时拿它和血氧对照 */
+  const waveformHrRef = useRef<number | null>(null);
+  const lastPktRef = useRef<BioPkt | null>(null);
   /** 波形流是否已成功开启（用于状态展示与自愈判断） */
   const streamOnRef = useRef(false);
   const wfRetryRef = useRef(0);
@@ -319,8 +351,9 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
 
     cleanupRef.current = bioBleMgr.subscribeToNotifications(
       (pkt) => {
+        lastPktRef.current = pkt;
         setData(pkt);
-        setDisplay((prev) => mergeDisplay(prev, pkt));
+        setDisplay((prev) => mergeDisplay(prev, pkt, waveformHrRef.current));
         setPktCount((c) => c + 1);
 
         analyzerRef.current.addPacket(pkt);
@@ -368,6 +401,13 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
       setDebugLines([...bioBleMgr.debugLog]);
       setLiveStats(analyzerRef.current.getStats());
       // 真实的 512Hz 波形窗口（协议 v4 波形流）；ecgWave 保留为 ecgRaw 趋势
+      const ecgTrack = assemblerRef.current.tracks.ecg;
+      const ecgFs = ecgTrack.nominalHz || 512;
+      waveformHrRef.current = estimateHrBpm(ecgTrack.samples, ecgFs);
+      const last = lastPktRef.current;
+      if (last) {
+        setDisplay((prev) => mergeDisplay(prev, last, waveformHrRef.current));
+      }
       setEcgWave(assemblerRef.current.ecgWindow());
       setHrWave(analyzerRef.current.getHrTrend());
       setSpo2Wave(analyzerRef.current.getSpo2Trend());
@@ -841,7 +881,8 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
 
 /* ─── Styles ─── */
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   /* Header */
   header: {
     flexDirection: 'row',
@@ -870,7 +911,7 @@ const styles = StyleSheet.create({
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginBottom: space.md },
   gridGap: { height: space.sm },
   statStack: { gap: space.sm },
-  statNote: { color: color.textMuted, marginTop: space.md, lineHeight: 16 },
+  statNote: { color: color.textMuted, marginTop: space.md, lineHeight: 22 },
 
   statBlock: {
     backgroundColor: color.raised,
@@ -904,33 +945,34 @@ const styles = StyleSheet.create({
     marginTop: space.md,
     paddingHorizontal: space.xs,
   },
-  hintText: { color: color.textMuted, flex: 1, lineHeight: 16 },
+  hintText: { color: color.textMuted, flex: 1, lineHeight: 22 },
 
   /* Debug tab */
   debugStack: { gap: space.sm },
-  debugWell: { backgroundColor: color.sunken, ...elevation.sunken },
+  debugWell: { backgroundColor: color.sunken, ...sunkenChrome(color) },
   debugEmptyText: { color: color.textMuted },
   debugMissing: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.lg },
   debugMissingText: { color: color.dangerText },
   debugLine: {
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 19,
     color: color.textSecondary,
     fontFamily: monoFont,
     marginBottom: space.xxs,
   },
   debugSvcUuid: {
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 14,
+    lineHeight: 20,
     color: color.accentText,
     fontFamily: monoFont,
     fontWeight: '700',
     marginBottom: space.xs,
   },
   debugCharLine: {
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 19,
     color: color.textMuted,
     fontFamily: monoFont,
   },
 });
+}

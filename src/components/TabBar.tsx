@@ -21,7 +21,8 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon, { type IconName } from './Icon';
-import { color, radius, space, type } from '../theme';
+import { radius, space, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 export interface TabItem {
   id: string;
@@ -44,9 +45,12 @@ export default function TabBar({
   tabs,
   activeTab,
   onSelect,
-  accentColor = color.accentText,
+  accentColor,
 }: TabBarProps) {
+  const { color } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
+  const activeTint = accentColor ?? color.accentText;
 
   return (
     <View
@@ -58,7 +62,7 @@ export default function TabBar({
     >
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab;
-        const tint = isActive ? accentColor : color.textMuted;
+        const tint = isActive ? activeTint : color.textMuted;
         const showBadge = tab.badge !== undefined && tab.badge !== 0;
 
         return (
@@ -71,7 +75,7 @@ export default function TabBar({
             style={({ pressed }) => [styles.tab, pressed && styles.tabPressed]}
           >
             {/* Channel rail: lit only on the active tab. */}
-            <View style={[styles.rail, isActive && { backgroundColor: accentColor }]} />
+            <View style={[styles.rail, isActive && { backgroundColor: activeTint }]} />
             <View style={styles.iconWrap}>
               <Icon name={tab.icon} size={21} color={tint} />
               {showBadge ? (
@@ -95,7 +99,8 @@ export default function TabBar({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   container: {
     flexDirection: 'row',
     backgroundColor: color.bg,
@@ -134,5 +139,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: color.danger,
   },
-  badgeText: { color: color.onDanger, fontSize: 10, lineHeight: 14, fontWeight: '700' },
+  badgeText: { color: color.onDanger, fontSize: 11, lineHeight: 15, fontWeight: '700' },
 });
+}

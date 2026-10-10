@@ -38,7 +38,8 @@ import {
   SegmentedControl,
   StatusDot,
 } from '../components/ui';
-import { color, radius, space, type } from '../theme';
+import { radius, space, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 type Mode = 'login' | 'register';
 
@@ -54,6 +55,8 @@ interface Props {
 }
 
 export default function AuthScreen({ onAuthed, onSkip }: Props) {
+  const { color } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [mode, setMode] = useState<Mode>('login');
   const [serverUrl, setServerUrl] = useState('');
   const [showServerEdit, setShowServerEdit] = useState(false);
@@ -312,7 +315,8 @@ export default function AuthScreen({ onAuthed, onSkip }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   flex: { flex: 1 },
   scroll: {
     flexGrow: 1,
@@ -394,6 +398,7 @@ const styles = StyleSheet.create({
     color: color.textFaint,
     textAlign: 'center',
     marginTop: space.xxl,
-    lineHeight: 18,
+    lineHeight: 22,
   },
 });
+}

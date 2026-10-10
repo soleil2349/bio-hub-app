@@ -40,7 +40,8 @@ import {
   SkeletonRow,
   StatCell,
 } from '../components/ui';
-import { color, space, type, vital } from '../theme';
+import { space, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 /** "2026年9月29日" style day label used to group the list. */
 function dayLabel(ts: number): string {
@@ -56,6 +57,8 @@ function dayLabel(ts: number): string {
 }
 
 export default function HistoryScreen() {
+  const { color, vital } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -376,7 +379,8 @@ export default function HistoryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   list: { padding: space.md, paddingBottom: space.xxxl, flexGrow: 1 },
 
   dayHeader: {
@@ -405,7 +409,7 @@ const styles = StyleSheet.create({
     gap: space.md,
   },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.md },
-  statsRange: { color: color.textMuted, lineHeight: 16 },
+  statsRange: { color: color.textMuted, lineHeight: 20 },
   statsLoading: { paddingVertical: space.lg, alignItems: 'center' },
 
   actionRow: { flexDirection: 'row', gap: space.sm },
@@ -414,3 +418,4 @@ const styles = StyleSheet.create({
   busyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.sm, paddingVertical: space.md },
   busyText: { color: color.textMuted, fontWeight: '400' },
 });
+}

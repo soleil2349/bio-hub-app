@@ -430,3 +430,53 @@ export function buildQualityUpload(q: SessionQuality): QualityUpload {
     onboardChkFail: on?.chkFail ?? 0,
   };
 }
+
+/**
+ * 从最近一段单通道波形估心率（bpm）。
+ *
+ * 给 App 实时显示用：芯片心率在信号质量 200 时仍可能吐出一个数，
+ * 这里用波形自己的峰间距再算一次，和血氧心率对照。
+ * 不应期 400ms，避免重搏切迹被计成第二次心跳。
+ * 样本不够、峰太少、间期太散或心率超出 40–180 时返回 null。
+ */
+export function estimateHrBpm(samples: ArrayLike<number>, fs: number): number | null {
+  if (!(fs >= 20) || samples.length < fs * 6) return null;
+  const n = Math.min(samples.length, Math.floor(fs * 10));
+  const start = samples.length - n;
+  const dev = new Array<number>(n);
+  let base = Number(samples[start]);
+  for (let i = 0; i < n; i++) {
+    const v = Number(samples[start + i]);
+    base += (v - base) / 64;
+    dev[i] = v - base;
+  }
+  let mad = 1;
+  for (let i = 0; i < n; i++) {
+    mad += (Math.abs(dev[i]) - mad) / 32;
+  }
+  const thr = Math.max(mad * 3, 1);
+  const refr = Math.max(2, Math.ceil(0.4 * fs));
+  const peaks: number[] = [];
+  let i = 1;
+  while (i < n - 1) {
+    const a = Math.abs(dev[i]);
+    if (a >= thr && a >= Math.abs(dev[i - 1]) && a >= Math.abs(dev[i + 1])) {
+      peaks.push(i);
+      i += refr;
+    } else {
+      i++;
+    }
+  }
+  if (peaks.length < 5) return null;
+  const rr: number[] = [];
+  for (let k = 1; k < peaks.length; k++) {
+    rr.push((peaks[k] - peaks[k - 1]) / fs);
+  }
+  rr.sort((a, b) => a - b);
+  const med = rr[Math.floor(rr.length / 2)];
+  if (!(med > 0)) return null;
+  const hr = 60 / med;
+  if (hr < 40 || hr > 180) return null;
+  if (rr[rr.length - 1] - rr[0] > med * 0.8) return null;
+  return Math.round(hr);
+}

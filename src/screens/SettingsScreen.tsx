@@ -46,7 +46,8 @@ import {
   SectionTitle,
   SegmentedControl,
 } from '../components/ui';
-import { color, radius, space, tabularNums, type } from '../theme';
+import { radius, space, tabularNums, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles, type ThemeMode } from '../theme-context';
 
 const SETTINGS_KEY = '@biohub_settings';
 
@@ -89,6 +90,12 @@ interface Props {
 }
 
 /** One settings row: label block on the left, control on the right. */
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+  { value: 'system', label: '跟随系统' },
+];
+
 function SettingRow({
   label,
   description,
@@ -100,6 +107,8 @@ function SettingRow({
   control?: React.ReactNode;
   onPress?: () => void;
 }) {
+  const { color } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const body = (
     <View style={styles.settingRow}>
       <View style={styles.settingInfo}>
@@ -125,6 +134,8 @@ function SettingRow({
 }
 
 export default function SettingsScreen({ onRequireLogin }: Props) {
+  const { color, mode, setMode } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [user, setUser] = useState<AuthUser | null>(authStore.getUser());
   const [showChangePwd, setShowChangePwd] = useState(false);
@@ -220,8 +231,17 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
       <ScreenHeader title="设置" subtitle="应用配置与数据管理" />
 
       <ScrollView contentContainerStyle={styles.body}>
+        <SectionTitle first>外观</SectionTitle>
+        <Card>
+          <Text style={[type.h2, styles.settingLabel]}>显示主题</Text>
+          <Text style={[type.label, styles.settingDesc]}>浅色便于阅读，深色适合暗处看波形</Text>
+          <View style={styles.durationPicker}>
+            <SegmentedControl options={THEME_OPTIONS} value={mode} onChange={setMode} />
+          </View>
+        </Card>
+
         {/* Account */}
-        <SectionTitle first>账户</SectionTitle>
+        <SectionTitle>账户</SectionTitle>
         <Card padded={false}>
           {user ? (
             <>
@@ -282,7 +302,7 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
                 value={settings.autoRecord}
                 onValueChange={(v) => updateSetting('autoRecord', v)}
                 trackColor={{ false: color.borderStrong, true: color.accent }}
-                thumbColor={settings.autoRecord ? color.accentText : color.textMuted}
+                thumbColor={settings.autoRecord ? color.onAccent : color.textMuted}
                 accessibilityLabel="自动记录"
               />
             }
@@ -296,7 +316,7 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
                 value={settings.showDebugOnConnect}
                 onValueChange={(v) => updateSetting('showDebugOnConnect', v)}
                 trackColor={{ false: color.borderStrong, true: color.accent }}
-                thumbColor={settings.showDebugOnConnect ? color.accentText : color.textMuted}
+                thumbColor={settings.showDebugOnConnect ? color.onAccent : color.textMuted}
                 accessibilityLabel="连接时显示调试面板"
               />
             }
@@ -314,7 +334,7 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
                 value={settings.preferSLE}
                 onValueChange={(v) => updateSetting('preferSLE', v)}
                 trackColor={{ false: color.borderStrong, true: color.violetBorder }}
-                thumbColor={settings.preferSLE ? color.violet : color.textMuted}
+                thumbColor={settings.preferSLE ? color.onAccent : color.textMuted}
                 accessibilityLabel="优先星闪"
               />
             }
@@ -486,7 +506,8 @@ export default function SettingsScreen({ onRequireLogin }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   body: { padding: space.lg, paddingBottom: space.huge },
 
   settingRow: {
@@ -498,7 +519,7 @@ const styles = StyleSheet.create({
   rowPressed: { backgroundColor: color.raisedHigh },
   settingInfo: { flex: 1, minWidth: 0 },
   settingLabel: { color: color.text },
-  settingDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 17 },
+  settingDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 22 },
   settingHint: { color: color.textFaint, marginTop: space.xxs },
 
   accountRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, padding: space.lg },
@@ -519,7 +540,7 @@ const styles = StyleSheet.create({
   durationPicker: { marginTop: space.md },
 
   dangerLabel: { color: color.dangerText },
-  dangerDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 17 },
+  dangerDesc: { color: color.textMuted, marginTop: space.xxs, fontWeight: '400', lineHeight: 22 },
 
   aboutRow: {
     flexDirection: 'row',
@@ -536,7 +557,7 @@ const styles = StyleSheet.create({
     color: color.textFaint,
     textAlign: 'center',
     marginTop: space.xxl,
-    lineHeight: 18,
+    lineHeight: 22,
   },
 
   /* Sheets */
@@ -559,3 +580,4 @@ const styles = StyleSheet.create({
   sheetActions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
   sheetBtn: { flex: 1 },
 });
+}

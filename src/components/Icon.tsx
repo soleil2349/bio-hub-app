@@ -19,7 +19,7 @@
  */
 import React from 'react';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
-import { color as palette } from '../theme';
+import { useTheme } from '../theme-context';
 
 /** Shared family constants. */
 const GRID = 24;
@@ -215,14 +215,15 @@ export interface IconProps {
   opacity?: number;
 }
 
-export default function Icon({ name, size = 20, color = palette.text, opacity }: IconProps) {
+export default function Icon({ name, size = 20, color, opacity }: IconProps) {
+  const { color: palette } = useTheme();
   return (
     <Svg
       width={size}
       height={size}
       viewBox={`0 0 ${GRID} ${GRID}`}
       fill="none"
-      stroke={color}
+      stroke={color ?? palette.text}
       strokeWidth={STROKE_WIDTH}
       strokeLinecap="round"
       strokeLinejoin="round"

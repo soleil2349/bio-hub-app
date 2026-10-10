@@ -34,13 +34,73 @@
  * Add a colour only after measuring it: the original palette shipped #4B5563
  * body text at 1.94:1, which is invisible on a dark screen.
  *
- * This is a DARK-LOCKED app by design — an instrument read in dim rooms next to
- * a sensor board. There is one theme, not two.
+ * Two themes share this contract. Dark is the bedside instrument. Light is a
+ * cool daylight bench — gray-blue paper, not warm cream — so the same vital
+ * hues stay recognisable and body text still clears WCAG AA.
  */
 
 /* ── Surfaces ────────────────────────────────────────────────────────────── */
 
-export const color = {
+export interface Palette {
+  scheme: 'light' | 'dark';
+  bg: string;
+  surface: string;
+  raised: string;
+  subtle: string;
+  raisedHigh: string;
+  sunken: string;
+  accentSurface: string;
+  border: string;
+  borderStrong: string;
+  divider: string;
+  highlight: string;
+  sunkenEdge: string;
+  text: string;
+  textSecondary: string;
+  textMuted: string;
+  textFaint: string;
+  accent: string;
+  accentText: string;
+  accentBorder: string;
+  accentLip: string;
+  focus: string;
+  success: string;
+  successText: string;
+  successSurface: string;
+  danger: string;
+  dangerText: string;
+  dangerSurface: string;
+  warning: string;
+  warningText: string;
+  warningSurface: string;
+  successBorder: string;
+  warningBorder: string;
+  dangerBorder: string;
+  violet: string;
+  violetSurface: string;
+  violetBorder: string;
+  onAccent: string;
+  onDanger: string;
+  plotGrid: string;
+  plotAxis: string;
+  neutral: string;
+}
+
+export interface VitalPalette {
+  hr: string;
+  ecgHr: string;
+  spo2: string;
+  temp: string;
+  sbp: string;
+  dbp: string;
+  pi: string;
+  ptt: string;
+  ecgSignal: string;
+  ir: string;
+}
+
+export const darkPalette: Palette = {
+  scheme: 'dark',
   /** App background — deepest layer. Never pure black. */
   bg: '#06090E',
   /** Headers and toolbars — the bezel lip above the content. */
@@ -69,6 +129,8 @@ export const color = {
   divider: '#16202A',
   /** 1px top edge on raised panels: reads as light falling from above. */
   highlight: 'rgba(255,255,255,0.055)',
+  /** Darker top edge inside inset wells. */
+  sunkenEdge: 'rgba(0,0,0,0.35)',
 
   /* ── Text ramp (all >= 4.5:1 on every surface above) ── */
   /** Primary copy, values, headings. 12.9:1 worst case. */
@@ -123,7 +185,56 @@ export const color = {
 
   /** Resting/unknown state. 4.5:1 worst case. */
   neutral: '#8593A0',
-} as const;
+};
+
+/** Daylight bench: cool gray paper, ink text, the same cyan reserved for actions. */
+export const lightPalette: Palette = {
+  scheme: 'light',
+  bg: '#E4EDF2',
+  surface: '#F7FAFB',
+  raised: '#FFFFFF',
+  subtle: '#F2F6F8',
+  raisedHigh: '#E7EEF3',
+  sunken: '#D5E0E8',
+  accentSurface: '#E5F5F9',
+  border: '#D0DCE4',
+  borderStrong: '#B4C4D0',
+  divider: '#E3EAEF',
+  highlight: '#FFFFFF',
+  sunkenEdge: '#C5D3DC',
+  text: '#142433',
+  textSecondary: '#243B4E',
+  textMuted: '#3E5668',
+  textFaint: '#4E6576',
+  accent: '#0E7490',
+  accentText: '#0B5E72',
+  accentBorder: '#A9D6E4',
+  accentLip: '#1490AE',
+  focus: '#0E7490',
+  success: '#157A3E',
+  successText: '#0E6532',
+  successSurface: '#E6F6EC',
+  danger: '#C43535',
+  dangerText: '#9E2222',
+  dangerSurface: '#FDECEC',
+  warning: '#9A6808',
+  warningText: '#7A5206',
+  warningSurface: '#FBF3DC',
+  successBorder: '#B7E0C6',
+  warningBorder: '#E6D199',
+  dangerBorder: '#F0C2C2',
+  violet: '#5B3FAA',
+  violetSurface: '#F2EDFA',
+  violetBorder: '#D4C7F0',
+  onAccent: '#FFFFFF',
+  onDanger: '#FFFFFF',
+  plotGrid: '#D5E1E9',
+  plotAxis: '#C3D1DB',
+  neutral: '#5C7282',
+};
+
+/** @deprecated Prefer `useTheme().color` so light mode can swap the palette. */
+export const color = darkPalette;
 
 /**
  * Vital-sign trace colours.
@@ -136,7 +247,7 @@ export const color = {
  * statistics row, report) so the eye can track one signal across screens.
  * All ten measure >= 5.8:1 on the card surface.
  */
-export const vital = {
+export const darkVital: VitalPalette = {
   hr: '#F87171',
   ecgHr: '#FB923C',
   spo2: '#60A5FA',
@@ -147,7 +258,24 @@ export const vital = {
   ptt: '#FBBF24',
   ecgSignal: '#818CF8',
   ir: '#94A3B8',
-} as const;
+};
+
+/** Same hues, darkened so they stay readable on white cards. */
+export const lightVital: VitalPalette = {
+  hr: '#C0364A',
+  ecgHr: '#C05612',
+  spo2: '#1B5FBF',
+  temp: '#0E7A52',
+  sbp: '#6A42C2',
+  dbp: '#8B3CB5',
+  pi: '#0C756A',
+  ptt: '#8A5A08',
+  ecgSignal: '#3E4CB3',
+  ir: '#4E5E6C',
+};
+
+/** @deprecated Prefer `useTheme().vital`. */
+export const vital = darkVital;
 
 /* ── Spacing — one 4-unit scale, no off-scale values ─────────────────────── */
 
@@ -200,17 +328,17 @@ type TypeStyle = {
  */
 export const type = {
   /** Big numerals: vitals, scores. Always pair with `tabularNums`. */
-  metric: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6 } as TypeStyle,
+  metric: { fontSize: 32, lineHeight: 40, fontWeight: '700', letterSpacing: -0.6 } as TypeStyle,
   /** Screen titles. */
-  h1: { fontSize: 20, lineHeight: 26, fontWeight: '700', letterSpacing: -0.2 } as TypeStyle,
+  h1: { fontSize: 22, lineHeight: 30, fontWeight: '700', letterSpacing: -0.2 } as TypeStyle,
   /** Card titles, section headings. */
-  h2: { fontSize: 16, lineHeight: 22, fontWeight: '600' } as TypeStyle,
+  h2: { fontSize: 18, lineHeight: 26, fontWeight: '600' } as TypeStyle,
   /** Body copy and list values. */
-  body: { fontSize: 14, lineHeight: 20, fontWeight: '400' } as TypeStyle,
+  body: { fontSize: 16, lineHeight: 24, fontWeight: '400' } as TypeStyle,
   /** Form labels, metadata, buttons. */
-  label: { fontSize: 12, lineHeight: 16, fontWeight: '600' } as TypeStyle,
-  /** Footnotes, hints, the smallest metadata tier. */
-  caption: { fontSize: 11, lineHeight: 15, fontWeight: '400' } as TypeStyle,
+  label: { fontSize: 15, lineHeight: 22, fontWeight: '600' } as TypeStyle,
+  /** Footnotes, hints, the smallest metadata tier. Still a reading size. */
+  caption: { fontSize: 13, lineHeight: 19, fontWeight: '400' } as TypeStyle,
 } as const;
 
 /** Tabular figures keep live numbers from shifting width as they change. */
@@ -240,20 +368,23 @@ export const HIT_SLOP = { top: 10, bottom: 10, left: 10, right: 10 } as const;
  * lighter surface plus a hairline top highlight — the same trick physical rack
  * equipment uses to read as a separate panel.
  */
-export const elevation = {
-  /** Applied by `Card` and raised panels. */
-  raised: {
+/** Raised panel chrome. Light mode uses a plain border; a top highlight only reads on near-black. */
+export function raisedChrome(palette: Palette) {
+  return {
     borderWidth: 1,
-    borderColor: color.border,
-    borderTopColor: color.highlight,
-  },
-  /** Inset wells (plots, inputs) get the inverse: a darker top edge. */
-  sunken: {
+    borderColor: palette.border,
+    borderTopColor: palette.scheme === 'dark' ? palette.highlight : palette.border,
+  };
+}
+
+/** Inset wells (plots, inputs): a darker top edge. */
+export function sunkenChrome(palette: Palette) {
+  return {
     borderWidth: 1,
-    borderColor: color.border,
-    borderTopColor: 'rgba(0,0,0,0.35)',
-  },
-} as const;
+    borderColor: palette.border,
+    borderTopColor: palette.sunkenEdge,
+  };
+}
 
 /* ── Motion ──────────────────────────────────────────────────────────────── */
 

@@ -13,7 +13,7 @@
  *   - rows never let a child push a sibling off-screen,
  *   - interactive marks always reach a 48dp touch target.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -34,16 +34,18 @@ import {
   MAX_CONTENT_WIDTH,
   SCREEN_PADDING,
   TOUCH_TARGET,
-  color,
-  elevation,
   monoFont,
   motion,
   radius,
+  raisedChrome,
   space,
+  sunkenChrome,
   tabularNums,
   type,
-  vital,
+  type Palette,
+  type VitalPalette,
 } from '../theme';
+import { useTheme } from '../theme-context';
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * Layout
@@ -74,6 +76,7 @@ export function Screen({
   style,
   constrain = false,
 }: ScreenProps) {
+  const { styles } = useUi();
   return (
     <SafeAreaView style={[styles.screen, style]} edges={edges as Edge[]}>
       {constrain ? <View style={styles.constrain}>{children}</View> : children}
@@ -91,6 +94,7 @@ export interface ScreenHeaderProps {
 }
 
 export function ScreenHeader({ title, subtitle, actions, children }: ScreenHeaderProps) {
+  const { styles } = useUi();
   const large = useLargeText();
   const insets = useSafeAreaInsets();
 
@@ -136,14 +140,17 @@ export function Card({
   style?: StyleProp<ViewStyle>;
   padded?: boolean;
 }) {
+  const { styles } = useUi();
   return <View style={[styles.card, padded && styles.cardPadded, style]}>{children}</View>;
 }
 
 export function Divider({ inset = true }: { inset?: boolean }) {
+  const { styles } = useUi();
   return <View style={[styles.divider, inset && styles.dividerInset]} />;
 }
 
 export function SectionTitle({ children, first }: { children: React.ReactNode; first?: boolean }) {
+  const { styles } = useUi();
   return (
     <Text style={[type.label, styles.sectionTitle, first && styles.sectionTitleFirst]}>
       {children}
@@ -189,8 +196,9 @@ export function Button({
   block,
   style,
 }: ButtonProps) {
+  const { styles, variants } = useUi();
   const isInert = disabled || loading;
-  const v = VARIANTS[variant];
+  const v = variants[variant];
 
   return (
     <Pressable
@@ -231,7 +239,7 @@ export function IconButton({
   icon,
   onPress,
   accessibilityLabel,
-  color: tint = color.textSecondary,
+  color: tint,
   disabled,
   style,
 }: {
@@ -242,6 +250,8 @@ export function IconButton({
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { styles, color } = useUi();
+  const ink = tint ?? color.textSecondary;
   return (
     <Pressable
       onPress={disabled ? undefined : onPress}
@@ -256,17 +266,19 @@ export function IconButton({
         style,
       ]}
     >
-      <Icon name={icon} size={20} color={tint} />
+      <Icon name={icon} size={20} color={ink} />
     </Pressable>
   );
 }
 
-const VARIANTS: Record<ButtonVariant, { bg: string; border: string; text: string }> = {
-  primary: { bg: color.accent, border: color.accentLip, text: color.onAccent },
-  secondary: { bg: color.raised, border: color.border, text: color.accentText },
-  danger: { bg: color.dangerSurface, border: color.dangerBorder, text: color.dangerText },
-  ghost: { bg: 'transparent', border: 'transparent', text: color.accentText },
-};
+function buttonVariants(color: Palette): Record<ButtonVariant, { bg: string; border: string; text: string }> {
+  return {
+    primary: { bg: color.accent, border: color.accentLip, text: color.onAccent },
+    secondary: { bg: color.raised, border: color.border, text: color.accentText },
+    danger: { bg: color.dangerSurface, border: color.dangerBorder, text: color.dangerText },
+    ghost: { bg: 'transparent', border: 'transparent', text: color.accentText },
+  };
+}
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * Segmented control — the one pattern for filters and view switches
@@ -291,6 +303,7 @@ export function SegmentedControl<T extends string>({
   /** Use a horizontal scroller when labels are long or numerous. */
   scrollable?: boolean;
 }) {
+  const { styles } = useUi();
   const body = (
     <View style={styles.segmentTrack}>
       {options.map((opt) => {
@@ -341,6 +354,7 @@ export function SegmentedControl<T extends string>({
  * Decorative dots are deliberately not supported — use a pill or plain text.
  */
 export function StatusDot({ tone, size = 8 }: { tone: 'ok' | 'warn' | 'bad' | 'idle'; size?: number }) {
+  const { styles, color } = useUi();
   const bg =
     tone === 'ok' ? color.success : tone === 'warn' ? color.warning : tone === 'bad' ? color.danger : color.neutral;
   return <View style={[styles.dot, { width: size, height: size, borderRadius: size / 2, backgroundColor: bg }]} />;
@@ -351,30 +365,36 @@ export function Pill({
   label,
   tone = 'neutral',
   icon,
+  wrap = false,
 }: {
   label: string;
   tone?: 'neutral' | 'accent' | 'ok' | 'warn' | 'bad' | 'violet';
   icon?: IconName;
+  /** Wrap the full label. Use for sentences; short tokens stay on one line. */
+  wrap?: boolean;
 }) {
-  const t = PILL_TONES[tone];
+  const { styles, tones } = useUi();
+  const t = tones[tone];
   return (
-    <View style={[styles.pill, { backgroundColor: t.bg, borderColor: t.border }]}>
-      {icon ? <Icon name={icon} size={11} color={t.text} /> : null}
-      <Text style={[styles.pillText, { color: t.text }]} numberOfLines={1}>
+    <View style={[styles.pill, wrap && styles.pillWrap, { backgroundColor: t.bg, borderColor: t.border }]}>
+      {icon ? <Icon name={icon} size={14} color={t.text} /> : null}
+      <Text style={[styles.pillText, { color: t.text }]} numberOfLines={wrap ? undefined : 1}>
         {label}
       </Text>
     </View>
   );
 }
 
-const PILL_TONES = {
-  neutral: { bg: color.subtle, border: color.border, text: color.textMuted },
-  accent: { bg: color.accentSurface, border: color.accentBorder, text: color.accentText },
-  ok: { bg: color.successSurface, border: color.successBorder, text: color.successText },
-  warn: { bg: color.warningSurface, border: color.warningBorder, text: color.warningText },
-  bad: { bg: color.dangerSurface, border: color.dangerBorder, text: color.dangerText },
-  violet: { bg: color.violetSurface, border: color.violetBorder, text: color.violet },
-} as const;
+function pillTones(color: Palette) {
+  return {
+    neutral: { bg: color.subtle, border: color.border, text: color.textMuted },
+    accent: { bg: color.accentSurface, border: color.accentBorder, text: color.accentText },
+    ok: { bg: color.successSurface, border: color.successBorder, text: color.successText },
+    warn: { bg: color.warningSurface, border: color.warningBorder, text: color.warningText },
+    bad: { bg: color.dangerSurface, border: color.dangerBorder, text: color.dangerText },
+    violet: { bg: color.violetSurface, border: color.violetBorder, text: color.violet },
+  };
+}
 
 export function StatusBadge({
   ok,
@@ -385,8 +405,9 @@ export function StatusBadge({
   label: string;
   tone?: 'ok' | 'bad' | 'idle';
 }) {
+  const { styles, tones } = useUi();
   const resolved = tone ?? (ok ? 'ok' : 'idle');
-  const t = PILL_TONES[resolved === 'ok' ? 'ok' : resolved === 'bad' ? 'bad' : 'neutral'];
+  const t = tones[resolved === 'ok' ? 'ok' : resolved === 'bad' ? 'bad' : 'neutral'];
   return (
     <View style={[styles.pill, { backgroundColor: t.bg, borderColor: t.border }]}>
       <StatusDot tone={resolved} size={6} />
@@ -420,6 +441,7 @@ export interface MetricTileProps {
  * left border, which clipped as soon as the system font scale went up.
  */
 export function MetricTile({ label, value, unit, hue, trend, emphasis }: MetricTileProps) {
+  const { styles, vital } = useUi();
   // Primary channels carry a faint wash of their own trace colour, the way a
   // monitor tints the parameter it is foregrounding. 12% alpha keeps the
   // surface dark enough that the text ramp above still clears 4.5:1.
@@ -430,7 +452,7 @@ export function MetricTile({ label, value, unit, hue, trend, emphasis }: MetricT
       <View style={styles.metricHeader}>
         <View style={styles.metricLabelWrap}>
           {hue ? <View style={[styles.metricSwatch, { backgroundColor: hue }]} /> : null}
-          <Text style={[type.caption, styles.metricLabel]} numberOfLines={1}>
+          <Text style={[type.caption, styles.metricLabel]} numberOfLines={2}>
             {label}
           </Text>
         </View>
@@ -474,6 +496,7 @@ export function MetricTile({ label, value, unit, hue, trend, emphasis }: MetricT
  * "every card has a truncated number in it".
  */
 export function MetricGrid({ children }: { children: React.ReactNode }) {
+  const { styles } = useUi();
   const { width, fontScale } = useWindowDimensions();
   const dense = fontScale >= 1.35 || width < 340;
   return <View style={[styles.metricGrid, dense && styles.metricGridStacked]}>{children}</View>;
@@ -481,6 +504,7 @@ export function MetricGrid({ children }: { children: React.ReactNode }) {
 
 /** Wraps a grid child so it participates in the two-up / stacked layout. */
 export function MetricGridItem({ children }: { children: React.ReactNode }) {
+  const { styles } = useUi();
   const { width, fontScale } = useWindowDimensions();
   const dense = fontScale >= 1.35 || width < 340;
   return <View style={dense ? styles.gridItemFull : styles.gridItemHalf}>{children}</View>;
@@ -508,10 +532,11 @@ export function DetailRow({
   /** Render the value in monospace; use for UUIDs, hosts and raw numbers. */
   mono?: boolean;
 }) {
+  const { styles } = useUi();
   if (stack) {
     return (
       <View style={[styles.detailRowStacked, !last && styles.detailRowBordered]}>
-        <Text style={[type.caption, styles.detailLabelStacked]} numberOfLines={1}>
+        <Text style={[type.caption, styles.detailLabelStacked]}>
           {label}
         </Text>
         <Text
@@ -531,7 +556,7 @@ export function DetailRow({
 
   return (
     <View style={[styles.detailRow, !last && styles.detailRowBordered]}>
-      <Text style={[type.body, styles.detailLabel]} numberOfLines={2}>
+      <Text style={[type.body, styles.detailLabel]}>
         {label}
       </Text>
       <Text
@@ -541,7 +566,6 @@ export function DetailRow({
           mono && styles.detailMono,
           valueColor ? { color: valueColor } : null,
         ]}
-        numberOfLines={2}
       >
         {value}
       </Text>
@@ -551,6 +575,7 @@ export function DetailRow({
 
 /** Compact label/value pair used inside statistic grids. */
 export function StatCell({ label, value, hue }: { label: string; value: string; hue?: string }) {
+  const { styles, color } = useUi();
   return (
     <View style={styles.statCell}>
       <Text style={[type.caption, styles.statCellLabel]} numberOfLines={1}>
@@ -583,6 +608,7 @@ export function EmptyState({
   description?: string;
   action?: React.ReactNode;
 }) {
+  const { styles, color } = useUi();
   return (
     <View style={styles.empty}>
       <View style={styles.emptyIcon}>
@@ -607,6 +633,7 @@ export function Skeleton({
   height?: number;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { styles } = useUi();
   const pulse = useRef(new Animated.Value(0.55)).current;
 
   useEffect(() => {
@@ -631,6 +658,7 @@ export function Skeleton({
 
 /** Skeleton shaped like a real list row, so the layout does not jump on load. */
 export function SkeletonRow() {
+  const { styles } = useUi();
   return (
     <View style={styles.skeletonRow}>
       <View style={styles.skeletonRowText}>
@@ -644,9 +672,10 @@ export function SkeletonRow() {
 
 /** Inline error surface: names the problem and keeps the recovery next to it. */
 export function ErrorNote({ message }: { message: string }) {
+  const { styles, color } = useUi();
   return (
     <View style={styles.errorNote}>
-      <Icon name="alert" size={15} color={color.dangerText} />
+      <Icon name="alert" size={16} color={color.dangerText} />
       <Text style={[type.label, styles.errorNoteText]}>{message}</Text>
     </View>
   );
@@ -667,20 +696,12 @@ export function currentFontScale(): number {
   return PixelRatio.getFontScale();
 }
 
-export const uiStyles = StyleSheet.create({
-  scrollContent: {
-    padding: SCREEN_PADDING,
-    paddingBottom: space.xxxl,
-  },
-  row: { flexDirection: 'row', alignItems: 'center' },
-  spacer: { flex: 1 },
-});
-
 /* ────────────────────────────────────────────────────────────────────────── *
  * Styles
  * ────────────────────────────────────────────────────────────────────────── */
 
-const styles = StyleSheet.create({
+function createStyles(color: Palette) {
+  return StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.bg },
   constrain: { flex: 1, width: '100%', maxWidth: MAX_CONTENT_WIDTH, alignSelf: 'center' },
 
@@ -704,7 +725,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: color.raised,
     borderRadius: radius.md,
-    ...elevation.raised,
+    ...raisedChrome(color),
     overflow: 'hidden',
   },
   cardPadded: { padding: space.lg },
@@ -746,7 +767,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: color.sunken,
     borderRadius: radius.md,
-    ...elevation.sunken,
+    ...sunkenChrome(color),
     padding: space.xs,
     gap: space.xs,
   },
@@ -780,7 +801,13 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     flexShrink: 1,
   },
-  pillText: { fontSize: 11, lineHeight: 15, fontWeight: '600', flexShrink: 1 },
+  pillWrap: {
+    alignSelf: 'stretch',
+    flexShrink: 0,
+    borderRadius: radius.md,
+    alignItems: 'flex-start',
+  },
+  pillText: { fontSize: 14, lineHeight: 20, fontWeight: '600', flexShrink: 1 },
 
   /* Metrics */
   metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
@@ -790,7 +817,7 @@ const styles = StyleSheet.create({
   metricTile: {
     backgroundColor: color.raised,
     borderRadius: radius.md,
-    ...elevation.raised,
+    ...raisedChrome(color),
     paddingHorizontal: space.md,
     paddingVertical: space.md,
     gap: space.xs,
@@ -806,8 +833,8 @@ const styles = StyleSheet.create({
   metricSwatch: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
   metricLabel: { color: color.textMuted, flexShrink: 1, minWidth: 0 },
   metricValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: space.xs + 2 },
-  metricValue: { fontSize: 23, lineHeight: 29, fontWeight: '700', color: color.text, flexShrink: 1, letterSpacing: -0.4 },
-  metricValueLg: { fontSize: 32, lineHeight: 38, fontWeight: '700', color: color.text, flexShrink: 1, letterSpacing: -0.8 },
+  metricValue: { fontSize: 26, lineHeight: 32, fontWeight: '700', color: color.text, flexShrink: 1, letterSpacing: -0.4 },
+  metricValueLg: { fontSize: 36, lineHeight: 44, fontWeight: '700', color: color.text, flexShrink: 1, letterSpacing: -0.8 },
   metricUnit: { color: color.textMuted, flexShrink: 0 },
 
   /* Detail rows */
@@ -824,14 +851,14 @@ const styles = StyleSheet.create({
     color: color.text,
     fontWeight: '600',
     flexShrink: 1,
-    maxWidth: '64%',
+    maxWidth: '62%',
     textAlign: 'right',
     ...tabularNums,
   },
   detailRowStacked: { paddingVertical: space.md, gap: space.xs },
   detailLabelStacked: { color: color.textMuted },
   detailValueStacked: { color: color.text, fontWeight: '600' },
-  detailMono: { fontFamily: monoFont, fontSize: 12, lineHeight: 18, letterSpacing: 0 },
+  detailMono: { fontFamily: monoFont, fontSize: 14, lineHeight: 20, letterSpacing: 0 },
 
   /* Stat cells */
   statCell: { flexGrow: 1, flexBasis: '30%', minWidth: 84, gap: space.xxs },
@@ -884,8 +911,42 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     padding: space.md,
   },
-  errorNoteText: { color: color.dangerText, flex: 1, fontWeight: '400', lineHeight: 18 },
+  errorNoteText: { color: color.dangerText, flex: 1, fontWeight: '400', lineHeight: 22 },
 });
+}
 
-export { motion, radius, space, color, type, tabularNums };
+type UiBag = {
+  styles: ReturnType<typeof createStyles>;
+  color: Palette;
+  vital: VitalPalette;
+  variants: ReturnType<typeof buttonVariants>;
+  tones: ReturnType<typeof pillTones>;
+};
+
+const UiContext = createContext<UiBag | null>(null);
+
+export function UiStyleBridge({ children }: { children: React.ReactNode }) {
+  const { color, vital } = useTheme();
+  const value = useMemo<UiBag>(
+    () => ({
+      styles: createStyles(color),
+      color,
+      vital,
+      variants: buttonVariants(color),
+      tones: pillTones(color),
+    }),
+    [color, vital],
+  );
+  return <UiContext.Provider value={value}>{children}</UiContext.Provider>;
+}
+
+function useUi(): UiBag {
+  const ctx = useContext(UiContext);
+  if (!ctx) {
+    throw new Error('UiStyleBridge missing');
+  }
+  return ctx;
+}
+
+export { motion, radius, space, type, tabularNums };
 export type { TextStyle };

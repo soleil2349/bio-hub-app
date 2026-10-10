@@ -13,7 +13,8 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Line, Polyline, Rect } from 'react-native-svg';
-import { color, elevation, radius, space, type } from '../theme';
+import { radius, space, sunkenChrome, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 export interface WaveformProps {
   data: number[];
@@ -41,6 +42,8 @@ export default function Waveform({
   showGrid = true,
   signed = false,
 }: WaveformProps) {
+  const { color } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const points = useMemo(() => {
     if (data.length < 2 || width <= 0) return '';
 
@@ -134,7 +137,8 @@ export default function Waveform({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   container: { width: '100%' },
   labelRow: {
     flexDirection: 'row',
@@ -146,7 +150,7 @@ const styles = StyleSheet.create({
   label: { color: color.textSecondary, flexShrink: 1, minWidth: 0 },
   unit: { color: color.textMuted, flexShrink: 0 },
   plot: { borderRadius: radius.sm, overflow: 'hidden' },
-  plotWell: { ...elevation.sunken, backgroundColor: color.sunken },
+  plotWell: { ...sunkenChrome(color), backgroundColor: color.sunken },
   emptyOverlay: {
     position: 'absolute',
     top: 0,
@@ -158,3 +162,4 @@ const styles = StyleSheet.create({
   },
   emptyText: { color: color.textMuted },
 });
+}

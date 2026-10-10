@@ -29,7 +29,9 @@ import { initDatabase } from './src/storage';
 import { bioHubAPI } from './src/api';
 import { authStore, AuthSession } from './src/auth';
 import { APP_VERSION } from './src/version';
-import { color, space, type } from './src/theme';
+import { space, type, type Palette } from './src/theme';
+import { ThemeProvider, useTheme, useThemedStyles } from './src/theme-context';
+import { UiStyleBridge } from './src/components/ui';
 
 type MainTab = 'scan' | 'cloud' | 'history' | 'settings';
 
@@ -37,6 +39,18 @@ type MainTab = 'scan' | 'cloud' | 'history' | 'settings';
 const GUEST_KEY = '@biohub_guest_mode';
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <UiStyleBridge>
+        <AppRoot />
+      </UiStyleBridge>
+    </ThemeProvider>
+  );
+}
+
+function AppRoot() {
+  const { color, resolved } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [activeTab, setActiveTab] = useState<MainTab>('scan');
   const [dbReady, setDbReady] = useState(false);
@@ -143,15 +157,15 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      {/* Headers now extend under the status bar, so the bar's own icons must
-          be light — otherwise Android draws dark icons on the dark header. */}
-      <StatusBar style="light" />
+      {/* Status-bar icons follow the active theme so they stay visible on the header. */}
+      <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
       {content}
     </SafeAreaProvider>
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: color.bg,
@@ -185,3 +199,4 @@ const styles = StyleSheet.create({
     marginTop: space.md,
   },
 });
+}

@@ -78,9 +78,10 @@ export class LiveAnalyzer {
   addPacket(pkt: BioPkt): void {
     if (pkt.hr > 0) this.hrValues.push(pkt.hr);
     if (pkt.spo2 > 0) this.spo2Values.push(pkt.spo2);
-    if (pkt.ecgHr > 0) this.ecgHrValues.push(pkt.ecgHr);
-    if (pkt.sbp > 0) this.sbpValues.push(pkt.sbp);
-    if (pkt.dbp > 0) this.dbpValues.push(pkt.dbp);
+    // 信号质量 0 最好、200 无接触。质量差时芯片仍可能给出一个心率，不能进均值。
+    if (pkt.ecgHr > 0 && pkt.ecgSig < 100) this.ecgHrValues.push(pkt.ecgHr);
+    if (pkt.flags.pttValid && pkt.sbp > 0) this.sbpValues.push(pkt.sbp);
+    if (pkt.flags.pttValid && pkt.dbp > 0) this.dbpValues.push(pkt.dbp);
     if (pkt.tempC > 0) this.tempValues.push(pkt.tempC);
     if (pkt.pi > 0) this.piValues.push(pkt.pi);
 

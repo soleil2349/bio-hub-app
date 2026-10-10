@@ -29,7 +29,8 @@ import {
   SegmentedControl,
   SkeletonRow,
 } from '../components/ui';
-import { color, monoFont, radius, space, tabularNums, type } from '../theme';
+import { monoFont, radius, space, tabularNums, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 interface Props {
   onConnected: (device: Device) => void;
@@ -54,6 +55,8 @@ function getDeviceType(name: string | null): ConnectionType {
 
 /** Four drawn bars. Level is derived from RSSI, never from a glyph string. */
 function SignalBars({ rssi }: { rssi: number | null }) {
+  const { color } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const level = rssi === null ? 0 : rssi > -50 ? 4 : rssi > -65 ? 3 : rssi > -80 ? 2 : 1;
   const tint =
     level >= 3 ? color.success : level === 2 ? color.warning : level === 1 ? color.danger : color.neutral;
@@ -74,6 +77,8 @@ function SignalBars({ rssi }: { rssi: number | null }) {
 }
 
 export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
+  const { color } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [devices, setDevices] = useState<Device[]>([]);
   const [scanning, setScanning] = useState(false);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -327,7 +332,8 @@ export default function ScanScreen({ onConnected, scanDuration = 10 }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   liveTag: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 },
   liveDot: { width: 8, height: 8, borderRadius: 4 },
   liveText: { color: color.textMuted },
@@ -369,7 +375,7 @@ const styles = StyleSheet.create({
   deviceName: { color: color.text, flexShrink: 1, minWidth: 0 },
   deviceNameMatch: { color: color.accentText },
   deviceId: {
-    fontSize: 11,
+    fontSize: 13,
     lineHeight: 15,
     color: color.textFaint,
     fontFamily: monoFont,
@@ -396,3 +402,4 @@ const styles = StyleSheet.create({
   noticeDismiss: { color: color.accentText, fontWeight: '600' },
   spacer: { flex: 1 },
 });
+}

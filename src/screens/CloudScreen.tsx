@@ -50,7 +50,8 @@ import {
   SkeletonRow,
   StatusDot,
 } from '../components/ui';
-import { color, radius, space, tabularNums, type, vital } from '../theme';
+import { radius, space, tabularNums, type, type Palette } from '../theme';
+import { useTheme, useThemedStyles } from '../theme-context';
 
 type ViewMode = 'sessions' | 'reports';
 
@@ -65,15 +66,17 @@ const VIEW_OPTIONS = [
 ];
 
 /** Health-score hue, shared by the list badge and the report header. */
-function scoreHue(score: number): string {
+function scoreHue(score: number, color: Palette): string {
   return score >= 80 ? color.success : score >= 60 ? color.warning : color.danger;
 }
 
-function statusHue(status: string): string {
+function statusHue(status: string, color: Palette): string {
   return status === 'normal' ? color.success : status === 'warning' ? color.warning : color.danger;
 }
 
 export default function CloudScreen({ onRequireLogin }: Props) {
+  const { color, vital } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [reports, setReports] = useState<AnalysisReport[]>([]);
@@ -236,7 +239,7 @@ export default function CloudScreen({ onRequireLogin }: Props) {
   };
 
   const renderReportItem = ({ item }: { item: AnalysisReport }) => {
-    const hue = scoreHue(item.healthScore);
+    const hue = scoreHue(item.healthScore, color);
 
     return (
       <Pressable
@@ -287,9 +290,7 @@ export default function CloudScreen({ onRequireLogin }: Props) {
             </View>
             <Icon name="chevronRight" size={18} color={color.textMuted} />
           </View>
-          <Text style={[type.body, styles.reportSummary]} numberOfLines={3}>
-            {item.summary}
-          </Text>
+          <Text style={[type.body, styles.reportSummary]}>{item.summary}</Text>
         </Card>
       </Pressable>
     );
@@ -303,10 +304,12 @@ export default function CloudScreen({ onRequireLogin }: Props) {
   ) => (
     <Card style={styles.detailCard}>
       <View style={styles.detailHeader}>
-        <Text style={[type.h2, styles.detailTitle]} numberOfLines={1}>
-          {title}
-        </Text>
-        <Pill label={v.message} tone={v.status === 'normal' ? 'ok' : v.status === 'warning' ? 'warn' : 'bad'} />
+        <Text style={[type.h2, styles.detailTitle]}>{title}</Text>
+        <Pill
+          wrap
+          label={v.message}
+          tone={v.status === 'normal' ? 'ok' : v.status === 'warning' ? 'warn' : 'bad'}
+        />
       </View>
       <DetailRow label="均值" value={String(v.avg || '--')} valueColor={hue} />
       <DetailRow label="范围" value={`${v.min || '--'} ~ ${v.max || '--'}`} last />
@@ -318,7 +321,7 @@ export default function CloudScreen({ onRequireLogin }: Props) {
   const renderReportModal = () => {
     if (!selectedReport) return null;
     const r = selectedReport;
-    const hue = scoreHue(r.healthScore);
+    const hue = scoreHue(r.healthScore, color);
 
     return (
       <Modal
@@ -356,10 +359,9 @@ export default function CloudScreen({ onRequireLogin }: Props) {
 
             <Card style={styles.detailCard}>
               <View style={styles.detailHeader}>
-                <Text style={[type.h2, styles.detailTitle]} numberOfLines={1}>
-                  心电分析
-                </Text>
+                <Text style={[type.h2, styles.detailTitle]}>心电分析</Text>
                 <Pill
+                  wrap
                   label={r.details.ecg.message}
                   tone={
                     r.details.ecg.status === 'normal'
@@ -377,10 +379,9 @@ export default function CloudScreen({ onRequireLogin }: Props) {
 
             <Card style={styles.detailCard}>
               <View style={styles.detailHeader}>
-                <Text style={[type.h2, styles.detailTitle]} numberOfLines={1}>
-                  血压分析
-                </Text>
+                <Text style={[type.h2, styles.detailTitle]}>血压分析</Text>
                 <Pill
+                  wrap
                   label={r.details.bp.message}
                   tone={
                     r.details.bp.status === 'normal'
@@ -618,7 +619,8 @@ export default function CloudScreen({ onRequireLogin }: Props) {
 
 /* ─── Styles ─── */
 
-const styles = StyleSheet.create({
+function makeStyles(color: Palette) {
+  return StyleSheet.create({
   serverBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -710,13 +712,11 @@ const styles = StyleSheet.create({
 
   detailCard: { marginBottom: space.sm },
   detailHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     gap: space.sm,
-    marginBottom: space.xs,
+    marginBottom: space.sm,
   },
-  detailTitle: { color: color.textSecondary, flexShrink: 1, minWidth: 0 },
+  detailTitle: { color: color.text },
 
   noRec: { color: color.textMuted },
   recRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.md },
@@ -744,7 +744,7 @@ const styles = StyleSheet.create({
     padding: space.md,
     marginTop: space.md,
   },
-  localNoteText: { flex: 1, minWidth: 0, color: color.textMuted, lineHeight: 16 },
+  localNoteText: { flex: 1, minWidth: 0, color: color.textMuted, lineHeight: 22 },
 
   /* Config modal */
   configOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)' },
@@ -776,3 +776,4 @@ const styles = StyleSheet.create({
   configActions: { flexDirection: 'row', gap: space.sm },
   configBtn: { flex: 1 },
 });
+}
