@@ -86,13 +86,13 @@ type DeviceTab = 'live' | 'wave' | 'stats' | 'debug';
 /* ─── Display Value Merging ─── */
 
 type DisplayValues = {
-  hr: string; ecgHr: string; spo2: string; tempC: string;
+  hr: string; ecgHr: string; spo2: string;
   sbp: string; dbp: string; pi: string; pttMs: string;
   ecgSig: string; ir: string; ecgRaw: string; rrMs: string;
 };
 
 const EMPTY_DISPLAY: DisplayValues = {
-  hr: '--', ecgHr: '--', spo2: '--', tempC: '--',
+  hr: '--', ecgHr: '--', spo2: '--',
   sbp: '--', dbp: '--', pi: '--', pttMs: '--',
   ecgSig: '--', ir: '--', ecgRaw: '--', rrMs: '--',
 };
@@ -124,7 +124,6 @@ function mergeDisplay(prev: DisplayValues, pkt: BioPkt, waveformHr: number | nul
     hr:     pkt.hr     ? String(pkt.hr)            : prev.hr,
     ecgHr:  pickEcgHr(pkt, waveformHr, prev.ecgHr),
     spo2:   pkt.spo2   ? String(pkt.spo2)          : prev.spo2,
-    tempC:  pkt.tempC  ? pkt.tempC.toFixed(1)       : prev.tempC,
     // PTT 标志掉了就清掉，避免上一拍的血压一直停在屏幕上
     sbp:    pkt.flags.pttValid && pkt.sbp ? String(pkt.sbp) : '--',
     dbp:    pkt.flags.pttValid && pkt.dbp ? String(pkt.dbp) : '--',
@@ -528,9 +527,6 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
           <MetricTile label="血氧饱和度" value={display.spo2} unit="%" hue={vital.spo2} />
         </MetricGridItem>
         <MetricGridItem>
-          <MetricTile label="设备温度" value={display.tempC} unit="°C" hue={vital.temp} />
-        </MetricGridItem>
-        <MetricGridItem>
           <MetricTile label="收缩压" value={display.sbp} unit="mmHg" hue={vital.sbp} />
         </MetricGridItem>
         <MetricGridItem>
@@ -725,14 +721,6 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
             max={0}
             unit="mmHg"
             hue={vital.sbp}
-          />
-          <StatBlock
-            label="温度"
-            avg={s?.tempAvg ?? 0}
-            min={0}
-            max={0}
-            unit="°C"
-            hue={vital.temp}
           />
           <StatBlock
             label="灌注指数"

@@ -322,6 +322,7 @@ export default function CloudScreen({ onRequireLogin }: Props) {
     if (!selectedReport) return null;
     const r = selectedReport;
     const hue = scoreHue(r.healthScore, color);
+    const recommendations = r.recommendations.filter((rec) => !rec.includes('体温'));
 
     return (
       <Modal
@@ -400,14 +401,12 @@ export default function CloudScreen({ onRequireLogin }: Props) {
               <DetailRow label="分级" value={r.details.bp.classification} last />
             </Card>
 
-            {renderVitalDetail('体温', r.details.temp, vital.temp)}
-
             <SectionTitle>健康建议</SectionTitle>
             <Card>
-              {r.recommendations.length === 0 ? (
+              {recommendations.length === 0 ? (
                 <Text style={[type.body, styles.noRec]}>本次分析没有额外建议。</Text>
               ) : (
-                r.recommendations.map((rec, i) => (
+                recommendations.map((rec, i) => (
                   <View key={i} style={[styles.recRow, i > 0 && styles.recRowSpaced]}>
                     <View style={styles.recBullet}>
                       <Text style={[type.caption, styles.recBulletText]}>{i + 1}</Text>

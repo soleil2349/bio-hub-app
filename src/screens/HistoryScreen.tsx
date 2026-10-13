@@ -265,7 +265,6 @@ export default function HistoryScreen() {
                     />
                     <StatCell label="心率 ECG" value={`${sessionStats.ecgHrAvg}`} hue={vital.ecgHr} />
                     <StatCell label="血氧" value={`${sessionStats.spo2Avg}%`} hue={vital.spo2} />
-                    <StatCell label="温度" value={`${sessionStats.tempAvg}°C`} hue={vital.temp} />
                     <StatCell
                       label="血压"
                       value={`${sessionStats.sbpAvg}/${sessionStats.dbpAvg}`}
