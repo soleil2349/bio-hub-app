@@ -23,6 +23,21 @@ Read the exact versioned docs at [https://docs.expo.dev/versions/v57.0.0/](https
 chore(release): v1.4.0 (versionCode 4)
 ```
 
+## 本地开发（Cloud Agent）
+
+Expo SDK 57 的最低 Node.js 是 **22.13.x**。本环境镜像已带 Node 22，直接装依赖即可，不要改回 Node 20。
+
+```bash
+npm ci
+npx tsc --noEmit
+npx expo start --localhost --port 8081
+```
+
+- `.npmrc` 里有 `ignore-scripts=true`，`npm ci` 不会跑依赖的 postinstall。
+- Metro 监听 `http://localhost:8081`（IPv6 `::1`）。就绪：`curl -sf http://localhost:8081/status`。不要设 `CI=1`，否则热更新会关掉。
+- 虚拟机里没有手机和 BLE 设备。改完 TypeScript 后跑 `npx tsc --noEmit`，再用 `curl "http://localhost:8081/index.bundle?platform=android&dev=true"` 确认能打包。传感器包解析在 `src/protocol.ts`。
+- `react-native-ble-plx` 不在 Expo Go 里。真机连传感器要走 EAS 或 GitHub Actions 打出来的开发包，扫码进 Expo Go 连不上板子。
+
 ## 构建产物签名提醒
 
 - **GitHub Actions**（`.github/workflows/build-apk.yml`）用 **debug keystore** 签名
