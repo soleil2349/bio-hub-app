@@ -32,7 +32,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { bioHubAPI, ServerStatus, AnalysisReport, UploadRecord } from '../api';
+import {
+  bioHubAPI,
+  ServerStatus,
+  AnalysisReport,
+  UploadRecord,
+  presentRecommendations,
+  REPORT_DISCLAIMER,
+} from '../api';
 import { Session, getAllSessions } from '../storage';
 import { formatTime, formatDuration } from '../analysis';
 import { authStore, AuthUser } from '../auth';
@@ -322,7 +329,8 @@ export default function CloudScreen({ onRequireLogin }: Props) {
     if (!selectedReport) return null;
     const r = selectedReport;
     const hue = scoreHue(r.healthScore, color);
-    const recommendations = r.recommendations.filter((rec) => !rec.includes('体温'));
+    const recommendations = presentRecommendations(r.recommendations);
+    const disclaimer = r.disclaimer?.trim() || REPORT_DISCLAIMER;
 
     return (
       <Modal
@@ -416,6 +424,10 @@ export default function CloudScreen({ onRequireLogin }: Props) {
                 ))
               )}
             </Card>
+            <View style={styles.disclaimer}>
+              <Icon name="info" size={15} color={color.textMuted} />
+              <Text style={[type.caption, styles.disclaimerText]}>{disclaimer}</Text>
+            </View>
 
             {r.id.startsWith('local_') ? (
               <View style={styles.localNote}>
@@ -731,6 +743,14 @@ function makeStyles(color: Palette) {
   },
   recBulletText: { color: color.accentText, fontWeight: '700' },
   recText: { flex: 1, minWidth: 0, color: color.textSecondary },
+  disclaimer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    marginTop: space.sm,
+    paddingHorizontal: space.xs,
+  },
+  disclaimerText: { flex: 1, minWidth: 0, color: color.textMuted, lineHeight: 20 },
 
   localNote: {
     flexDirection: 'row',

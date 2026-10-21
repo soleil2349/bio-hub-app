@@ -2,14 +2,14 @@
   "expo": {
     "name": "BIO HUB",
     "slug": "xingsan",
-    "version": "1.9.1",
+    "version": "1.10.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.biohub.sensorapp",
       "supportsTablet": false,
-      "buildNumber": "12",
+      "buildNumber": "19",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "需要蓝牙权限来连接 BIO_HUB 传感器",
         "NSBluetoothPeripheralUsageDescription": "需要蓝牙权限来连接 BIO_HUB 传感器",
@@ -20,7 +20,7 @@
     },
     "android": {
       "package": "com.biohub.sensorapp",
-      "versionCode": 12,
+      "versionCode": 19,
       "adaptiveIcon": {
         "backgroundColor": "#0A0E1A"
       },

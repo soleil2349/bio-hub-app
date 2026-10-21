@@ -70,6 +70,38 @@ export interface AnalysisReport {
     temp: VitalAnalysis;
   };
   recommendations: string[];
+  /** 单独展示，不放进健康建议编号列表。旧报告可能没有这个字段。 */
+  disclaimer?: string;
+}
+
+/** 报告页底部单独展示，不作为一条健康建议。 */
+export const REPORT_DISCLAIMER =
+  '本报告为健康参考，不构成医疗诊断；如有不适请及时就医。';
+
+const WEAR_HINT = '请检查佩戴是否贴合、保持静止后重新测量。';
+
+const SIGNAL_JARGON =
+  /质量分|放行阈值|质量不足|SQI|信号质量不足|丢样|有效搏动|未给出\s*ECG|未给出\s*PPG|未给出心电|不对\s*ECG|不对\s*PPG|未对\s*ECG|未对\s*PPG/;
+
+/**
+ * 健康建议只保留面向用户的句子。
+ * 免责声明拆出去；质量分、阈值等工程说法收成一句佩戴提示。
+ * 服务端已整理过的新报告再过一遍也是同一结果。
+ */
+export function presentRecommendations(recs: string[] | undefined): string[] {
+  const out: string[] = [];
+  let needsWear = false;
+  for (const raw of recs ?? []) {
+    const text = raw.trim();
+    if (!text || text.includes('体温') || text.includes('不构成医疗诊断')) continue;
+    if (text === WEAR_HINT || SIGNAL_JARGON.test(text)) {
+      needsWear = true;
+      continue;
+    }
+    if (!out.includes(text)) out.push(text);
+  }
+  if (needsWear && !out.includes(WEAR_HINT)) out.push(WEAR_HINT);
+  return out;
 }
 
 export interface VitalAnalysis {

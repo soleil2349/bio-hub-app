@@ -31,16 +31,18 @@ import {
   LED_MODE_BLINK,
   LED_MODE_LABELS,
 } from '../protocol';
-import { LiveAnalyzer, LiveStats, formatDuration } from '../analysis';
+import { HeldMedian, LiveAnalyzer, LiveStats, formatDuration } from '../analysis';
 import { createSession, endSession, queueMeasurement, flushPending, isReady } from '../storage';
 import {
+  LIVE_TRACE_SECONDS,
   WaveformAssembler,
   buildUploadPayloads,
   buildQualityUpload,
+  estimateHrBpm,
+  liveTrace,
   stashSessionWaveforms,
 } from '../waveform';
 import { BIO_RATE_512_100 } from '../protocol';
-import { estimateHrBpm } from '../waveform';
 import Waveform from '../components/Waveform';
 import TabBar from '../components/TabBar';
 import Icon from '../components/Icon';
@@ -71,8 +73,10 @@ import { useTheme, useThemedStyles } from '../theme-context';
  * 测过的无损速率，不再为省带宽把心电抽成 128 Hz。
  */
 const SESSION_RATE_CODE = BIO_RATE_512_100;
-/** 固件 ecg_sig：0 最好，200 表示无接触。达到此值就不用芯片心率。 */
+/** 固件 ecg_sig：0 最好。200 只表示芯片检峰没锁定，不代表波形里没有心拍。 */
 const ECG_SIG_UNUSABLE = 100;
+const SESSION_ECG_FS = 512;
+const SESSION_PPG_FS = 100;
 const STREAM_ECG_AND_PPG = 3;
 
 interface Props {
@@ -97,42 +101,68 @@ const EMPTY_DISPLAY: DisplayValues = {
   ecgSig: '--', ir: '--', ecgRaw: '--', rrMs: '--',
 };
 
-/** 芯片心率与血氧心率相差不超过 20% 才算对得上。 */
-function agreesWithPpg(candidate: number, ppgHr: number): boolean {
-  if (candidate <= 0) return false;
-  if (ppgHr <= 0) return true;
-  return Math.abs(candidate - ppgHr) / ppgHr <= 0.2;
+type Readout = {
+  hr: HeldMedian;
+  ecgHr: HeldMedian;
+  spo2: HeldMedian;
+  sbp: HeldMedian;
+  dbp: HeldMedian;
+  pi: HeldMedian;
+  pttMs: HeldMedian;
+  ir: HeldMedian;
+  rrMs: HeldMedian;
+};
+
+function createReadout(): Readout {
+  return {
+    hr: new HeldMedian(),
+    ecgHr: new HeldMedian(),
+    spo2: new HeldMedian(),
+    sbp: new HeldMedian(),
+    dbp: new HeldMedian(),
+    pi: new HeldMedian(),
+    pttMs: new HeldMedian(),
+    ir: new HeldMedian(),
+    rrMs: new HeldMedian(),
+  };
+}
+
+function fmtInt(v: number | null): string {
+  return v == null ? '--' : String(Math.round(v));
+}
+
+function fmtFixed(v: number | null, digits: number): string {
+  return v == null ? '--' : v.toFixed(digits);
 }
 
 /**
- * 心电心率显示。
- * 信号质量差，或芯片心率与血氧心率对不上时，不用芯片那个数。
- * 波形重算的心率若能与血氧对上，就用重算值；否则显示空，避免 54 和 90 长期并排。
+ * 血压、血氧、灌注进短时中位数。
+ * 两个心率不在这里收：芯片会把一拍拆成两拍，或把两拍并成一拍，
+ * 和画面上的波形不是一回事。心率由每秒一次的波形估计写入。
  */
-function pickEcgHr(pkt: BioPkt, waveformHr: number | null, _prev: string): string {
-  if (pkt.ecgSig < ECG_SIG_UNUSABLE && agreesWithPpg(pkt.ecgHr, pkt.hr)) {
-    return String(pkt.ecgHr);
-  }
-  if (waveformHr && agreesWithPpg(waveformHr, pkt.hr)) {
-    return String(waveformHr);
-  }
-  return '--';
+function ingestPacket(r: Readout, pkt: BioPkt, now: number): void {
+  if (pkt.spo2 > 0) r.spo2.push(pkt.spo2, now);
+  if (pkt.flags.pttValid && pkt.sbp > 0) r.sbp.push(pkt.sbp, now);
+  if (pkt.flags.pttValid && pkt.dbp > 0) r.dbp.push(pkt.dbp, now);
+  if (pkt.pi > 0) r.pi.push(pkt.pi, now);
+  if (pkt.flags.pttValid && pkt.pttMs > 0) r.pttMs.push(pkt.pttMs, now);
+  if (pkt.ir > 0) r.ir.push(pkt.ir, now);
+  if (pkt.rrMs > 0) r.rrMs.push(pkt.rrMs, now);
 }
 
-function mergeDisplay(prev: DisplayValues, pkt: BioPkt, waveformHr: number | null): DisplayValues {
+function snapshotDisplay(r: Readout, pkt: BioPkt | null, now: number): DisplayValues {
   return {
-    hr:     pkt.hr     ? String(pkt.hr)            : prev.hr,
-    ecgHr:  pickEcgHr(pkt, waveformHr, prev.ecgHr),
-    spo2:   pkt.spo2   ? String(pkt.spo2)          : prev.spo2,
-    // PTT 标志掉了就清掉，避免上一拍的血压一直停在屏幕上
-    sbp:    pkt.flags.pttValid && pkt.sbp ? String(pkt.sbp) : '--',
-    dbp:    pkt.flags.pttValid && pkt.dbp ? String(pkt.dbp) : '--',
-    pi:     pkt.pi     ? pkt.pi.toFixed(1)          : prev.pi,
-    pttMs:  pkt.flags.pttValid && pkt.pttMs ? String(pkt.pttMs) : '--',
-    ecgSig: String(pkt.ecgSig),
-    ir:     pkt.ir     ? String(pkt.ir)             : prev.ir,
-    ecgRaw: String(pkt.ecgRaw),
-    rrMs:   pkt.rrMs   ? String(pkt.rrMs)           : prev.rrMs,
+    hr: fmtInt(r.hr.read(now)),
+    ecgHr: fmtInt(r.ecgHr.read(now)),
+    spo2: fmtInt(r.spo2.read(now)),
+    sbp: fmtInt(r.sbp.read(now)),
+    dbp: fmtInt(r.dbp.read(now)),
+    pi: fmtFixed(r.pi.read(now), 1),
+    pttMs: fmtInt(r.pttMs.read(now)),
+    ecgSig: pkt ? String(pkt.ecgSig) : '--',
+    ir: fmtInt(r.ir.read(now)),
+    ecgRaw: pkt ? String(pkt.ecgRaw) : '--',
+    rrMs: fmtInt(r.rrMs.read(now)),
   };
 }
 
@@ -198,6 +228,7 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
   const [ecgWave, setEcgWave] = useState<number[]>([]);
+  const [ppgWave, setPpgWave] = useState<number[]>([]);
   const [hrWave, setHrWave] = useState<number[]>([]);
   const [spo2Wave, setSpo2Wave] = useState<number[]>([]);
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(
@@ -213,6 +244,7 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
   const cleanupRef = useRef<(() => void) | null>(null);
   const disconnectRef = useRef<(() => void) | null>(null);
   const analyzerRef = useRef(new LiveAnalyzer());
+  const readoutRef = useRef(createReadout());
   const sessionIdRef = useRef<number | null>(null);
   /** 协议 v4 波形重组器：会话期间持续按 index 落位并核算丢样 */
   const assemblerRef = useRef(new WaveformAssembler());
@@ -343,6 +375,7 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
     setConnType(bioBleMgr.getConnectionType());
     setDebugLines([...bioBleMgr.debugLog]);
     analyzerRef.current.reset();
+    readoutRef.current = createReadout();
 
     if (autoRecord) {
       startRecording();
@@ -352,7 +385,7 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
       (pkt) => {
         lastPktRef.current = pkt;
         setData(pkt);
-        setDisplay((prev) => mergeDisplay(prev, pkt, waveformHrRef.current));
+        ingestPacket(readoutRef.current, pkt, Date.now());
         setPktCount((c) => c + 1);
 
         analyzerRef.current.addPacket(pkt);
@@ -399,15 +432,38 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
     const updateTimer = setInterval(() => {
       setDebugLines([...bioBleMgr.debugLog]);
       setLiveStats(analyzerRef.current.getStats());
-      // 真实的 512Hz 波形窗口（协议 v4 波形流）；ecgWave 保留为 ecgRaw 趋势
+      const now = Date.now();
       const ecgTrack = assemblerRef.current.tracks.ecg;
-      const ecgFs = ecgTrack.nominalHz || 512;
-      waveformHrRef.current = estimateHrBpm(ecgTrack.samples, ecgFs);
+      const ppgTrack = assemblerRef.current.tracks.ppg;
+      const ecgFs = SESSION_ECG_FS;
+      const ppgFs = SESSION_PPG_FS;
+      const ecgEst = estimateHrBpm(ecgTrack.samples, ecgFs, 'ecg');
+      const ppgEst = estimateHrBpm(ppgTrack.ir, ppgFs, 'ppg');
+      waveformHrRef.current = ecgEst;
+      const readout = readoutRef.current;
       const last = lastPktRef.current;
-      if (last) {
-        setDisplay((prev) => mergeDisplay(prev, last, waveformHrRef.current));
+      // 大数字跟屏幕上这 8 秒波形走。芯片只在波形还数不出心拍时兜底，
+      // 而且不因为脉搏心率对不上就把心电心率丢掉。
+      if (ecgEst) {
+        readout.ecgHr.push(ecgEst, now);
+        analyzerRef.current.noteDisplayedHr('ecg', ecgEst);
+      } else if (
+        !readout.ecgHr.hasRecent(now) &&
+        last &&
+        last.ecgSig < ECG_SIG_UNUSABLE &&
+        last.ecgHr > 0
+      ) {
+        readout.ecgHr.push(last.ecgHr, now);
       }
-      setEcgWave(assemblerRef.current.ecgWindow());
+      if (ppgEst) {
+        readout.hr.push(ppgEst, now);
+        analyzerRef.current.noteDisplayedHr('ppg', ppgEst);
+      } else if (!readout.hr.hasRecent(now) && last && last.hr > 0) {
+        readout.hr.push(last.hr, now);
+      }
+      setDisplay(snapshotDisplay(readout, last, now));
+      setEcgWave(liveTrace(ecgTrack.samples, ecgFs, 'ecg'));
+      setPpgWave(liveTrace(ppgTrack.ir, ppgFs, 'ppg'));
       setHrWave(analyzerRef.current.getHrTrend());
       setSpo2Wave(analyzerRef.current.getSpo2Trend());
 
@@ -593,8 +649,22 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
               width={waveWidth}
               height={150}
               color={color.success}
-              label={`ECG 波形${wfStats?.ecgHz ? `（${wfStats.ecgHz} Hz）` : ''}`}
+              label={`ECG 波形（${wfStats?.ecgHz || 512} Hz · ${LIVE_TRACE_SECONDS} 秒）`}
               unit="raw"
+              signed
+            />
+          ) : null}
+        </View>
+        <View style={styles.waveGap} />
+        <View style={styles.waveSlot}>
+          {waveWidth > 0 ? (
+            <Waveform
+              data={ppgWave}
+              width={waveWidth}
+              height={120}
+              color={vital.hr}
+              label={`PPG 波形（${wfStats?.ppgHz || 100} Hz · ${LIVE_TRACE_SECONDS} 秒）`}
+              unit="IR"
               signed
             />
           ) : null}
@@ -602,8 +672,8 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
 
         <Card style={styles.waveInfo}>
           <DetailRow
-            label="窗口点数"
-            value={`${ecgWave.length} / 480`}
+            label="显示窗口"
+            value={`最近 ${LIVE_TRACE_SECONDS} 秒`}
           />
           <DetailRow label="累计 ECG 点" value={String(wfStats?.ecgPoints ?? 0)} />
           <DetailRow
@@ -701,8 +771,8 @@ export default function DeviceScreen({ device, onDisconnect, autoRecord = true }
           <StatBlock
             label="心率 (ECG)"
             avg={s?.ecgHrAvg ?? 0}
-            min={0}
-            max={0}
+            min={s?.ecgHrMin ?? 0}
+            max={s?.ecgHrMax ?? 0}
             unit="BPM"
             hue={vital.ecgHr}
           />

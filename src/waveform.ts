@@ -149,8 +149,7 @@ export class WaveformAssembler {
 
   /**
    * 界面显示用的"最近 n 个 ECG 点"（真实 512Hz 波形，不是 ecgRaw 瞬时值）。
-   * 界面上那条旧的"ECG 波形"来自 bio_pkt.ecgRaw（每 500ms 一个点 ≈2Hz），
-   * 只能看趋势；这里给的是真正的采样波形。
+   * 实时页请用 liveTrace：固定看最近几秒，而不是固定 480 点（512Hz 下不到 1 秒，只能看见一个心拍）。
    */
   ecgWindow(n = 480): number[] {
     const s = this.tracks.ecg.samples;
@@ -431,52 +430,357 @@ export function buildQualityUpload(q: SessionQuality): QualityUpload {
   };
 }
 
+/** 实时波形横轴：最近 8 秒。512Hz 下大约能看到 8～10 个心拍，而不是一个。 */
+export const LIVE_TRACE_SECONDS = 8;
+const LIVE_TRACE_POINTS = 720;
+
+function tailSamples(samples: ArrayLike<number>, n: number): number[] {
+  const len = samples.length;
+  const count = Math.min(len, n);
+  const start = len - count;
+  const out = new Array<number>(count);
+  for (let i = 0; i < count; i++) out[i] = Number(samples[start + i]);
+  return out;
+}
+
 /**
- * 从最近一段单通道波形估心率（bpm）。
- *
- * 给 App 实时显示用：芯片心率在信号质量 200 时仍可能吐出一个数，
- * 这里用波形自己的峰间距再算一次，和血氧心率对照。
- * 不应期 400ms，避免重搏切迹被计成第二次心跳。
- * 样本不够、峰太少、间期太散或心率超出 40–180 时返回 null。
+ * 按时间抽成固定点数，每个桶保留最小值和最大值。
+ * 心电的 R 峰很窄，等间隔抽点会把它抽没；先取极值再画，峰还在。
  */
-export function estimateHrBpm(samples: ArrayLike<number>, fs: number): number | null {
+function decimateMinMax(data: number[], target: number): number[] {
+  if (data.length <= target) return data;
+  const pairs = Math.max(1, Math.floor(target / 2));
+  const bucket = data.length / pairs;
+  const out: number[] = [];
+  for (let i = 0; i < pairs; i++) {
+    const start = Math.floor(i * bucket);
+    const end = Math.min(data.length, Math.max(start + 1, Math.floor((i + 1) * bucket)));
+    let min = data[start];
+    let max = data[start];
+    let minAt = start;
+    let maxAt = start;
+    for (let j = start + 1; j < end; j++) {
+      const v = data[j];
+      if (v < min) {
+        min = v;
+        minAt = j;
+      }
+      if (v > max) {
+        max = v;
+        maxAt = j;
+      }
+    }
+    if (minAt <= maxAt) out.push(min, max);
+    else out.push(max, min);
+  }
+  return out;
+}
+
+/**
+ * 和 dev/scripts/live_bio_plot.py 同一套显示滤波，只作用于画出的这一小段。
+ * 心电：3 阶巴特沃斯 0.5–40 Hz，再陷 50 Hz（Q=30），采样率 512。
+ * 脉搏：3 阶巴特沃斯 0.5–8 Hz，采样率 100。
+ * 系数由 scipy.signal.butter / iirnotch 算出。零相位（正反各滤一次），
+ * 否则 8 秒窗口两头会翘起来。滤波前先减掉这一窗的均值：
+ * 这套系数从零状态起步，脉搏直流有十几万，不减的话开头会冲出几万，
+ * 真脉搏就被画成一条直线。心率估计仍用原始样本，不经过这里。
+ */
+const ECG_BAND_SOS = [
+  [0.0092603562, 0.0185207124, 0.0092603562, 1, -1.4360096134, 0.6258554706],
+  [1, 0, -1, 1, -1.6010920356, 0.6035547643],
+  [1, -2, 1, 1, -1.9939222928, 0.9939602768],
+];
+const ECG_NOTCH_SOS = [
+  [0.9898766355, -1.6186162081, 0.9898766355, 1, -1.6186162081, 0.979753271],
+];
+const PPG_BAND_SOS = [
+  [0.0085986861, 0.0171973722, 0.0085986861, 1, -1.4543775493, 0.6486481864],
+  [1, 0, -1, 1, -1.5998427471, 0.6128007881],
+  [1, -2, 1, 1, -1.9702236431, 0.971247856],
+];
+
+function sosfilt(sos: number[][], x: number[]): number[] {
+  let y = x;
+  for (let s = 0; s < sos.length; s++) {
+    const sec = sos[s];
+    const a0 = sec[3] || 1;
+    const b0 = sec[0] / a0;
+    const b1 = sec[1] / a0;
+    const b2 = sec[2] / a0;
+    const a1 = sec[4] / a0;
+    const a2 = sec[5] / a0;
+    const out = new Array<number>(y.length);
+    let x1 = 0;
+    let x2 = 0;
+    let y1 = 0;
+    let y2 = 0;
+    for (let i = 0; i < y.length; i++) {
+      const xn = y[i];
+      const yn = b0 * xn + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+      x2 = x1;
+      x1 = xn;
+      y2 = y1;
+      y1 = yn;
+      out[i] = yn;
+    }
+    y = out;
+  }
+  return y;
+}
+
+function filtfilt(sos: number[][], x: number[]): number[] {
+  if (x.length < 12) return x.slice();
+  const pad = Math.min(x.length - 1, 3 * sos.length * 2);
+  const ext = new Array<number>(x.length + pad * 2);
+  for (let i = 0; i < pad; i++) ext[i] = 2 * x[0] - x[pad - i];
+  for (let i = 0; i < x.length; i++) ext[pad + i] = x[i];
+  const last = x.length - 1;
+  for (let i = 0; i < pad; i++) ext[pad + x.length + i] = 2 * x[last] - x[last - 1 - i];
+  const fwd = sosfilt(sos, ext);
+  fwd.reverse();
+  const back = sosfilt(sos, fwd);
+  back.reverse();
+  return back.slice(pad, pad + x.length);
+}
+
+function displayFilter(data: number[], kind: 'ecg' | 'ppg'): number[] {
+  if (data.length < 12) return data.slice();
+  // 滤波从零状态起步。脉搏红外直流大约十几万，不先减掉的话，
+  // 开头会冲出几万个计数，再按最大绝对值铺满纵坐标，真脉搏（几百个计数）就看成一条直线。
+  // 带通本来就会去掉直流；scipy 的 filtfilt 用初始状态避开了这一下，这里减窗口均值，效果一样。
+  let mean = 0;
+  for (let i = 0; i < data.length; i++) mean += data[i];
+  mean /= data.length;
+  const centered = new Array<number>(data.length);
+  for (let i = 0; i < data.length; i++) centered[i] = data[i] - mean;
+  if (kind === 'ecg') return filtfilt(ECG_NOTCH_SOS, filtfilt(ECG_BAND_SOS, centered));
+  return filtfilt(PPG_BAND_SOS, centered);
+}
+
+/**
+ * 实时波形：取最近 LIVE_TRACE_SECONDS 秒，按观察脚本滤一遍，再抽到画布点数。
+ */
+export function liveTrace(
+  samples: ArrayLike<number>,
+  fs: number,
+  kind: 'ecg' | 'ppg' = 'ecg',
+): number[] {
+  if (!(fs >= 1) || samples.length < 2) return [];
+  const n = Math.min(samples.length, Math.round(fs * LIVE_TRACE_SECONDS));
+  const data = displayFilter(tailSamples(samples, n), kind);
+  return decimateMinMax(data, LIVE_TRACE_POINTS);
+}
+
+type Peak = { i: number; h: number };
+
+/**
+ * 靠得太近的两个峰只留更高的那个。
+ * 心电的 T 波、脉搏的重搏切迹会在一次搏动里再冒一个矮峰，
+ * 不丢掉的话心率会变成两倍（画面上仍是正常心拍）。
+ */
+function pruneClosePeaks(peaks: Peak[], fs: number): Peak[] {
+  const minGap = Math.ceil(0.36 * fs);
+  const kept = peaks.slice();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let k = 1; k < kept.length; k++) {
+      if (kept[k].i - kept[k - 1].i >= minGap) continue;
+      kept.splice(kept[k].h < kept[k - 1].h ? k : k - 1, 1);
+      changed = true;
+      break;
+    }
+  }
+  if (kept.length < 6) return kept;
+  const heights = kept.map((p) => p.h).sort((a, b) => a - b);
+  const mid = heights[Math.floor(heights.length / 2)];
+  const tall = kept.filter((p) => p.h >= mid * 0.65);
+  return tall.length >= 4 ? tall : kept;
+}
+
+function hrFromPeaks(peaks: Peak[], fs: number): number | null {
+  if (peaks.length < 4) return null;
+  const rr: number[] = [];
+  for (let k = 1; k < peaks.length; k++) {
+    rr.push((peaks[k].i - peaks[k - 1].i) / fs);
+  }
+  rr.sort((a, b) => a - b);
+  const med = rr[Math.floor(rr.length / 2)];
+  if (!(med > 0)) return null;
+  let near = 0;
+  for (let k = 0; k < rr.length; k++) {
+    if (rr[k] > med * 0.6 && rr[k] < med * 1.4) near++;
+  }
+  if (near < 4) return null;
+  const hr = 60 / med;
+  if (hr < 40 || hr > 180) return null;
+  return Math.round(hr);
+}
+
+/**
+ * 用自相关找这一窗的重复周期。
+ * 漏掉一两拍、或最高的一拍特别高时，逐拍找峰会把间期拉长，心率掉到三十多。
+ * 周期对得上的位置相关最强。若两倍周期也差不多强，取更短的那个，避免把两拍当成一拍。
+ */
+function hrFromPeriod(y: number[], fs: number): number | null {
+  const n = y.length;
+  let energy = 0;
+  for (let i = 0; i < n; i++) energy += y[i] * y[i];
+  if (!(energy > 1)) return null;
+  const minLag = Math.round(fs * 0.33);
+  const maxLag = Math.min(n - 4, Math.round(fs * 1.5));
+  if (maxLag <= minLag + 2) return null;
+  const ac = new Array<number>(maxLag + 1);
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let c = 0;
+    const m = n - lag;
+    for (let i = 0; i < m; i++) c += y[i] * y[i + lag];
+    ac[lag] = c / energy;
+  }
+  let best = 0;
+  let bestLag = 0;
+  for (let lag = minLag + 1; lag < maxLag; lag++) {
+    const norm = ac[lag];
+    if (norm >= ac[lag - 1] && norm > ac[lag + 1] && norm > best && norm >= 0.2) {
+      best = norm;
+      bestLag = lag;
+    }
+  }
+  if (!bestLag) return null;
+  const half = Math.round(bestLag / 2);
+  if (half >= minLag && ac[half] >= best * 0.65) bestLag = half;
+  const hr = 60 / (bestLag / fs);
+  if (hr < 40 || hr > 180) return null;
+  return Math.round(hr);
+}
+
+/**
+ * 漏掉的拍会把间期拉到 1 秒以上，全部取中位数心率就偏低。
+ * 只留彼此相差不超过约 18% 的那一簇，用这一簇的中位数。
+ */
+function hrFromCluster(rrSec: number[]): { hr: number; n: number } | null {
+  const xs = rrSec.filter((r) => r > 0.38 && r < 1.45).sort((a, b) => a - b);
+  if (xs.length < 3) return null;
+  let bestN = 0;
+  let bestMed = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const c = xs[i];
+    const sel: number[] = [];
+    for (let j = 0; j < xs.length; j++) {
+      if (xs[j] > c * 0.85 && xs[j] < c * 1.18) sel.push(xs[j]);
+    }
+    if (sel.length > bestN) {
+      bestN = sel.length;
+      bestMed = sel[Math.floor(sel.length / 2)];
+    }
+  }
+  if (bestN < 3 || !(bestMed > 0)) return null;
+  const hr = Math.round(60 / bestMed);
+  if (hr < 40 || hr > 160) return null;
+  return { hr, n: bestN };
+}
+
+/** 突出度够的局部峰。朝上、朝下各走一次，收缩峰朝下时也不会整拍漏掉。 */
+function promIntervals(y: number[], fs: number): number[] {
+  let mean = 0;
+  for (let i = 0; i < y.length; i++) mean += y[i];
+  mean /= y.length;
+  let varSum = 0;
+  for (let i = 0; i < y.length; i++) {
+    const d = y[i] - mean;
+    varSum += d * d;
+  }
+  const sd = Math.sqrt(varSum / y.length) || 1;
+  const z = new Array<number>(y.length);
+  for (let i = 0; i < y.length; i++) z[i] = (y[i] - mean) / sd;
+  const dist = Math.max(2, Math.round(0.42 * fs));
+  const span = dist * 2;
+  const kept: number[] = [];
+  for (let i = 1; i < z.length - 1; i++) {
+    if (!(z[i] >= z[i - 1] && z[i] > z[i + 1] && z[i] > 0)) continue;
+    const lo = Math.max(0, i - span);
+    const hi = Math.min(z.length, i + 1 + span);
+    if (i === lo || hi <= i + 1) continue;
+    let leftMin = z[lo];
+    for (let k = lo + 1; k < i; k++) if (z[k] < leftMin) leftMin = z[k];
+    let rightMin = z[i + 1];
+    for (let k = i + 2; k < hi; k++) if (z[k] < rightMin) rightMin = z[k];
+    if (z[i] - Math.max(leftMin, rightMin) < 0.35) continue;
+    if (!kept.length || i - kept[kept.length - 1] >= dist) kept.push(i);
+    else if (z[i] > z[kept[kept.length - 1]]) kept[kept.length - 1] = i;
+  }
+  const rr: number[] = [];
+  for (let k = 1; k < kept.length; k++) rr.push((kept[k] - kept[k - 1]) / fs);
+  return rr;
+}
+
+function choosePpgHr(cands: { hr: number; n: number }[]): number | null {
+  if (!cands.length) return null;
+  cands.sort((a, b) => b.n - a.n || a.hr - b.hr);
+  if (cands.length === 1) return cands[0].hr;
+  const h1 = cands[0];
+  const h2 = cands[1];
+  const lo = h1.hr < h2.hr ? h1.hr : h2.hr;
+  const hi = h1.hr < h2.hr ? h2.hr : h1.hr;
+  if (lo < 55 && hi >= lo * 1.5 && hi <= 110 && hi <= lo * 2.1) return Math.round(hi);
+  if (h1.n >= h2.n + 2) return h1.hr;
+  if (Math.abs(h1.hr - h2.hr) <= 12) return Math.round((h1.hr + h2.hr) / 2);
+  return h1.hr;
+}
+
+function ppgClusterBpm(filtered: number[], fs: number): number | null {
+  const cands: { hr: number; n: number }[] = [];
+  const up = hrFromCluster(promIntervals(filtered, fs));
+  const down = hrFromCluster(promIntervals(filtered.map((v) => -v), fs));
+  if (up) cands.push(up);
+  if (down) cands.push(down);
+  return choosePpgHr(cands);
+}
+
+/**
+ * 从屏幕上这一段波形估心率（bpm）。
+ *
+ * 和 liveTrace 用同一套带通。心电先看重复周期，对不上再数峰（R 波取绝对值）。
+ * 脉搏朝上朝下都数，并且只用间期靠得拢的那一簇：漏拍拉长的间隔不再把中位数拖低。
+ * 样本不够或心率超出范围时返回 null。
+ */
+export function estimateHrBpm(
+  samples: ArrayLike<number>,
+  fs: number,
+  kind: 'ecg' | 'ppg' = 'ecg',
+): number | null {
   if (!(fs >= 20) || samples.length < fs * 6) return null;
-  const n = Math.min(samples.length, Math.floor(fs * 10));
-  const start = samples.length - n;
-  const dev = new Array<number>(n);
-  let base = Number(samples[start]);
-  for (let i = 0; i < n; i++) {
-    const v = Number(samples[start + i]);
-    base += (v - base) / 64;
-    dev[i] = v - base;
+  const n = Math.min(samples.length, Math.round(fs * LIVE_TRACE_SECONDS));
+  const filtered = displayFilter(tailSamples(samples, n), kind);
+  if (kind === 'ppg') {
+    const clustered = ppgClusterBpm(filtered, fs);
+    if (clustered != null) return clustered;
+    const byPeriod = hrFromPeriod(filtered, fs);
+    if (byPeriod != null && byPeriod >= 55) return byPeriod;
+    return null;
   }
-  let mad = 1;
-  for (let i = 0; i < n; i++) {
-    mad += (Math.abs(dev[i]) - mad) / 32;
+  const byPeriod = hrFromPeriod(filtered, fs);
+  if (byPeriod != null) return byPeriod;
+  let maxA = 0;
+  for (let i = 0; i < filtered.length; i++) {
+    const a = Math.abs(filtered[i]);
+    if (a > maxA) maxA = a;
   }
-  const thr = Math.max(mad * 3, 1);
-  const refr = Math.max(2, Math.ceil(0.4 * fs));
-  const peaks: number[] = [];
+  // R 波又高又窄，最大值的三成就能躲开 T 波。
+  const thr = Math.max(maxA * 0.35, 1);
+  const refr = Math.max(2, Math.ceil(0.28 * fs));
+  const peaks: Peak[] = [];
   let i = 1;
-  while (i < n - 1) {
-    const a = Math.abs(dev[i]);
-    if (a >= thr && a >= Math.abs(dev[i - 1]) && a >= Math.abs(dev[i + 1])) {
-      peaks.push(i);
+  while (i < filtered.length - 1) {
+    const a = Math.abs(filtered[i]);
+    const left = Math.abs(filtered[i - 1]);
+    const right = Math.abs(filtered[i + 1]);
+    if (a >= thr && a >= left && a >= right && a > 0) {
+      peaks.push({ i, h: a });
       i += refr;
     } else {
       i++;
     }
   }
-  if (peaks.length < 5) return null;
-  const rr: number[] = [];
-  for (let k = 1; k < peaks.length; k++) {
-    rr.push((peaks[k] - peaks[k - 1]) / fs);
-  }
-  rr.sort((a, b) => a - b);
-  const med = rr[Math.floor(rr.length / 2)];
-  if (!(med > 0)) return null;
-  const hr = 60 / med;
-  if (hr < 40 || hr > 180) return null;
-  if (rr[rr.length - 1] - rr[0] > med * 0.8) return null;
-  return Math.round(hr);
+  return hrFromPeaks(pruneClosePeaks(peaks, fs), fs);
 }
